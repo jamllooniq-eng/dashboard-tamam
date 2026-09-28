@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>لوحة المنتجات | تمام شوب</title>
+<style>
+  @font-face { font-family: 'Cairo'; font-weight: 400; font-display: swap; src: url('/fonts/cairo/cairo-400.woff2') format('woff2'); }
+  @font-face { font-family: 'Cairo'; font-weight: 600; font-display: swap; src: url('/fonts/cairo/cairo-600.woff2') format('woff2'); }
+  @font-face { font-family: 'Cairo'; font-weight: 800; font-display: swap; src: url('/fonts/cairo/cairo-800.woff2') format('woff2'); }
+
+  :root {
+    --teal: #22A39E;
+    --teal-deep: #178581;
+    --teal-wash: #E8F6F5;
+    --ink: #172033;
+    --muted: #5B6475;
+    --line: #E3E6EA;
+    --paper: #F6F7F8;
+    --danger: #C2362B;
+    --radius-lg: 18px;
+    --radius-sm: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: 'Cairo', system-ui, -apple-system, 'Segoe UI', Tahoma, sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+  button, input, textarea, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 3px solid color-mix(in srgb, var(--teal) 55%, white); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  /* ---------- Top bar ---------- */
+  .bar {
+    background: var(--ink);
+    color: #fff;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .bar h1 { margin: 0; font-size: 17px; font-weight: 800; }
+  .bar h1 span { color: #7FD6D2; font-weight: 600; }
+  .bar button {
+    background: transparent;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,.3);
+    border-radius: var(--radius-sm);
+    padding: 6px 14px;
+  }
+
+  main { max-width: 1120px; margin: 0 auto; padding: 24px 16px 64px; }
+
+  /* ---------- Login ---------- */
+  .login {
+    max-width: 380px;
+    margin: 12vh auto 0;
+    background: #fff;
+    border-radius: var(--radius-lg);
+    padding: 32px 28px;
+    border: 1px solid var(--line);
+  }
+  .login h2 { margin: 0 0 4px; font-size: 22px; font-weight: 800; }
+  .login p { margin: 0 0 22px; color: var(--muted); }
+
+  /* ---------- Layout ---------- */
+  .grid { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 880px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 22px; }
+  .panel-form { position: sticky; top: 16px; border-top: 5px solid var(--teal); }
+  @media (max-width: 880px) { .panel-form { position: static; } }
+  .panel h2 { margin: 0 0 18px; font-size: 18px; font-weight: 800; }
+
+  /* ---------- Fields ---------- */
+  .field { margin-bottom: 16px; }
+  .field label, .field .label { display: block; font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  input[type=text], input[type=password], input[type=number], textarea {
+    width: 100%;
+    border: 1.5px solid var(--line);
+    background: #fff;
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    transition: border-color .15s;
+  }
+  input:focus, textarea:focus { border-color: var(--teal); outline: none; }
+  textarea { min-height: 130px; resize: vertical; }
+  .price-wrap { position: relative; }
+  .price-wrap input { padding-left: 52px; direction: ltr; text-align: right; }
+  .price-wrap span { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-weight: 600; }
+
+  /* Sheet choice: the one decision that routes the order, so it gets the visual weight */
+  .sheets { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sheet-opt { position: relative; }
+  .sheet-opt input { position: absolute; opacity: 0; inset: 0; }
+  .sheet-opt span {
+    display: block;
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-weight: 600;
+    text-align: center;
+    transition: all .15s;
+  }
+  .sheet-opt small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+  .sheet-opt input:checked + span { border-color: var(--teal); background: var(--teal-wash); color: var(--teal-deep); }
+  .sheet-opt input:focus-visible + span { outline: 3px solid color-mix(in srgb, var(--teal) 55%, white); outline-offset: 2px; }
+
+  /* Images */
+  .drop {
+    border: 2px dashed #C9CFD6;
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    background: var(--paper);
+  }
+  .drop.drag { border-color: var(--teal); background: var(--teal-wash); }
+  .drop strong { color: var(--teal-deep); }
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(78px, 1fr)); gap: 8px; margin-top: 10px; }
+  .thumb { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--paper); border: 1px solid var(--line); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .main-tag {
+    position: absolute; bottom: 0; inset-inline: 0;
+    background: var(--teal); color: #fff; font-size: 11px; text-align: center; font-weight: 600;
+  }
+  .thumb .x {
+    position: absolute; top: 4px; left: 4px;
+    width: 22px; height: 22px; border-radius: 50%; border: 0;
+    background: rgba(23,32,51,.75); color: #fff; font-size: 14px; line-height: 22px; padding: 0;
+  }
+  .thumb .mk {
+    position: absolute; top: 4px; right: 4px;
+    border: 0; border-radius: 6px; background: rgba(255,255,255,.9);
+    font-size: 11px; padding: 1px 6px; color: var(--ink);
+  }
+  .thumb.loading::after {
+    content: ''; position: absolute; inset: 0;
+    background: rgba(255,255,255,.65) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='%2322A39E' stroke-width='3' stroke-dasharray='40 20'%3E%3CanimateTransform attributeName='transform' type='rotate' from='0 12 12' to='360 12 12' dur='0.8s' repeatCount='indefinite'/%3E%3C/circle%3E%3C/svg%3E") center no-repeat;
+  }
+
+  .toggle { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .toggle input { width: 18px; height: 18px; accent-color: var(--teal); }
+
+  /* Buttons */
+  .btn {
+    border: 0; border-radius: var(--radius-sm);
+    padding: 11px 18px; font-weight: 800;
+    background: var(--teal); color: #fff;
+  }
+  .btn:hover { background: var(--teal-deep); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--muted); font-weight: 600; }
+  .btn-ghost:hover { background: var(--paper); color: var(--ink); }
+  .actions { display: flex; gap: 8px; align-items: center; }
+  .actions .btn { flex: 1; }
+
+  .msg { border-radius: var(--radius-sm); padding: 10px 12px; margin-bottom: 14px; font-weight: 600; }
+  .msg.err { background: #FDECEA; color: var(--danger); }
+  .msg.ok { background: var(--teal-wash); color: var(--teal-deep); }
+
+  /* ---------- Product list ---------- */
+  .list-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+  .list-head h2 { margin: 0; }
+  .count { color: var(--muted); }
+  .items { display: flex; flex-direction: column; gap: 10px; }
+  .item {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #fff;
+  }
+  .item.off { background: var(--paper); }
+  .item.off .item-img { filter: grayscale(1); opacity: .6; }
+  .item-img { width: 72px; height: 72px; border-radius: 10px; object-fit: cover; background: var(--paper); display: block; }
+  .item-title { font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .item-price { color: var(--teal-deep); font-weight: 800; }
+  .tag { border-radius: 6px; padding: 0 8px; font-size: 12px; font-weight: 600; background: var(--paper); border: 1px solid var(--line); color: var(--ink); }
+  .tag.other { background: #FFF4E0; border-color: #F3D9A6; color: #8A5A00; }
+  .item-actions { display: flex; gap: 4px; }
+  .item-actions button, .item-actions a {
+    border: 1px solid var(--line); background: #fff; border-radius: 8px;
+    padding: 5px 10px; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none;
+  }
+  .item-actions .del { color: var(--danger); }
+  @media (max-width: 560px) {
+    .item { grid-template-columns: 60px minmax(0, 1fr); }
+    .item-img { width: 60px; height: 60px; }
+    .item-actions { grid-column: 1 / -1; justify-content: flex-start; flex-wrap: wrap; }
+  }
+
+  .empty { text-align: center; padding: 42px 16px; color: var(--muted); }
+  .empty strong { display: block; color: var(--ink); font-size: 16px; margin-bottom: 4px; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <h1>تمام شوب <span>المنتجات اليدوية</span></h1>
+  <button id="logoutBtn" type="button" hidden>تسجيل الخروج</button>
+</header>
+
+<main>
+  <!-- Login -->
+  <section id="loginView" class="login" hidden>
+    <h2>تسجيل الدخول</h2>
+    <p>أدخل كلمة سر لوحة التحكم.</p>
+    <div id="loginMsg" class="msg err" hidden></div>
+    <form id="loginForm">
+      <div class="field">
+        <label for="password">كلمة السر</label>
+        <input id="password" type="password" autocomplete="current-password" required />
+      </div>
+      <button class="btn" type="submit" style="width:100%">دخول</button>
+    </form>
+  </section>
+
+  <!-- Dashboard -->
+  <div id="appView" class="grid" hidden>
+    <section class="panel panel-form" aria-labelledby="formTitle">
+      <h2 id="formTitle">إضافة منتج</h2>
+      <div id="formMsg" class="msg" hidden></div>
+      <form id="productForm" novalidate>
+        <div class="field">
+          <label for="title">اسم المنتج</label>
+          <input id="title" type="text" maxlength="200" required />
+        </div>
+
+        <div class="field">
+          <label for="price">سعر المنتج</label>
+          <div class="price-wrap">
+            <input id="price" type="number" inputmode="numeric" min="1" step="1" required />
+            <span>د.ع</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="label">الصور</span>
+          <div id="drop" class="drop" tabindex="0" role="button" aria-label="اختيار صور المنتج">
+            اسحب الصور هنا أو <strong>اختر من جهازك</strong>
+          </div>
+          <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden />
+          <div id="thumbs" class="thumbs"></div>
+          <div class="hint">أول صورة هي الصورة الرئيسية بالمتجر. حتى 10 صور.</div>
+        </div>
+
+        <div class="field">
+          <label for="description">وصف المنتج</label>
+          <textarea id="description" maxlength="10000"></textarea>
+        </div>
+
+        <div class="field">
+          <span class="label">الطلبات تروح إلى</span>
+          <div class="sheets">
+            <label class="sheet-opt">
+              <input type="radio" name="sheet" value="other" checked />
+              <span>الشيت الآخر<small>منتج أجهزه بنفسي</small></span>
+            </label>
+            <label class="sheet-opt">
+              <input type="radio" name="sheet" value="rolemall" />
+              <span>شيت رولمول<small>نفس شيت الأفليت</small></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="toggle"><input id="isActive" type="checkbox" checked /> ظاهر بالمتجر</label>
+        </div>
+
+        <div class="actions">
+          <button id="saveBtn" class="btn" type="submit">إضافة المنتج</button>
+          <button id="cancelEditBtn" class="btn btn-ghost" type="button" hidden>إلغاء التعديل</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel" aria-labelledby="listTitle">
+      <div class="list-head">
+        <h2 id="listTitle">منتجاتك</h2>
+        <span id="count" class="count"></span>
+      </div>
+      <div id="listMsg" class="msg err" hidden></div>
+      <div id="items" class="items"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const API = '/api/admin';
+  const TOKEN_KEY = 'tamam_admin_token';
+  const MAX_IMAGES = 10;
+  const MAX_EDGE = 1600;
+
+  const $ = (id) => document.getElementById(id);
+  const state = { products: [], images: [], editingId: null, uploading: 0 };
+
+  // ---------- storage (guarded) ----------
+  const store = {
+    get() { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } },
+    set(v) { try { localStorage.setItem(TOKEN_KEY, v); } catch {} },
+    clear() { try { localStorage.removeItem(TOKEN_KEY); } catch {} },
+  };
+
+  // ---------- API ----------
+  async function api(action, body) {
+    const res = await fetch(`${API}?action=${action}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${store.get()}` },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await res.json(); } catch {}
+    if (res.status === 401 && action !== 'login') { logout(); throw new Error(data.error || 'انتهت الجلسة'); }
+    if (!res.ok) throw new Error(data.error || `خطأ (${res.status})`);
+    return data;
+  }
+
+  // ---------- helpers ----------
+  const fmt = (n) => Number(n).toLocaleString('en-US');
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function show(el, text, kind) {
+    el.textContent = text;
+    el.className = `msg ${kind || 'err'}`;
+    el.hidden = !text;
+  }
+
+  // ---------- views ----------
+  function logout() {
+    store.clear();
+    $('appView').hidden = true;
+    $('logoutBtn').hidden = true;
+    $('loginView').hidden = false;
+    $('password').focus();
+  }
+
+  async function enterApp() {
+    $('loginView').hidden = true;
+    $('appView').hidden = false;
+    $('logoutBtn').hidden = false;
+    await loadList();
+  }
+
+  // ---------- login ----------
+  $('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    show($('loginMsg'), '');
+    const btn = e.target.querySelector('button');
+    btn.disabled = true;
+    try {
+      const { token } = await api('login', { password: $('password').value });
+      store.set(token);
+      $('password').value = '';
+      await enterApp();
+    } catch (err) {
+      show($('loginMsg'), err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $('logoutBtn').addEventListener('click', logout);
+
+  // ---------- list ----------
+  async function loadList() {
+    show($('listMsg'), '');
+    try {
+      const { products } = await api('list');
+      state.products = products;
+      renderList();
+    } catch (err) {
+      show($('listMsg'), err.message);
+    }
+  }
+
+  function renderList() {
+    const items = $('items');
+    const n = state.products.length;
+    $('count').textContent = n ? `${n} منتج` : '';
+    if (!n) {
+      items.innerHTML = `<div class="empty"><strong>ما أضفت أي منتج بعد</strong>املأ النموذج وسيظهر المنتج هنا وبالمتجر.</div>`;
+      return;
+    }
+    items.innerHTML = state.products.map((p) => `
+      <article class="item ${p.is_active ? '' : 'off'}" data-id="${p.id}">
+        <img class="item-img" src="${esc(p.images[0] || '')}" alt="" loading="lazy" />
+        <div style="min-width:0">
+          <div class="item-title">${esc(p.title)}</div>
+          <div class="item-meta">
+            <span class="item-price">${fmt(p.price)} د.ع</span>
+            <span class="tag ${p.sheet_target === 'other' ? 'other' : ''}">${p.sheet_target === 'other' ? 'الشيت الآخر' : 'شيت رولمول'}</span>
+            ${p.is_active ? '' : '<span class="tag">مخفي</span>'}
+          </div>
+        </div>
+        <div class="item-actions">
+          <button type="button" data-act="edit">تعديل</button>
+          <button type="button" data-act="toggle">${p.is_active ? 'إخفاء' : 'إظهار'}</button>
+          <a href="/product/m-${p.id}" target="_blank" rel="noopener">عرض</a>
+          <button type="button" class="del" data-act="delete">حذف</button>
+        </div>
+      </article>`).join('');
+  }
+
+  $('items').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const id = Number(btn.closest('.item').dataset.id);
+    const product = state.products.find((p) => p.id === id);
+    if (!product) return;
+
+    if (btn.dataset.act === 'edit') return startEdit(product);
+
+    btn.disabled = true;
+    try {
+      if (btn.dataset.act === 'toggle') {
+        await api('update', { id, is_active: !product.is_active });
+      } else if (btn.dataset.act === 'delete') {
+        if (!confirm(`حذف "${product.title}" نهائياً؟`)) { btn.disabled = false; return; }
+        await api('delete', { id });
+        if (state.editingId === id) resetForm();
+      }
+      await loadList();
+    } catch (err) {
+      show($('listMsg'), err.message);
+      btn.disabled = false;
+    }
+  });
+
+  // ---------- images ----------
+  function renderThumbs() {
+    $('thumbs').innerHTML = state.images.map((img, i) => `
+      <div class="thumb ${img.url ? '' : 'loading'}" data-i="${i}">
+        <img src="${esc(img.url || img.preview)}" alt="" />
+        ${i === 0 ? '<span class="main-tag">الرئيسية</span>' : (img.url ? '<button type="button" class="mk" data-act="main">رئيسية</button>' : '')}
+        <button type="button" class="x" data-act="remove" aria-label="حذف الصورة">×</button>
+      </div>`).join('');
+  }
+
+  $('thumbs').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const i = Number(btn.closest('.thumb').dataset.i);
+    if (btn.dataset.act === 'remove') state.images.splice(i, 1);
+    if (btn.dataset.act === 'main') state.images.unshift(state.images.splice(i, 1)[0]);
+    renderThumbs();
+  });
+
+  // Resize in the browser before upload: faster uploads, stays under the function size limit
+  function compress(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const src = URL.createObjectURL(file);
+      img.onload = () => {
+        const scale = Math.min(1, MAX_EDGE / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(src);
+        const finish = (blob) => {
+          if (!blob) return reject(new Error('تعذر تجهيز الصورة'));
+          const reader = new FileReader();
+          reader.onload = () => resolve({ type: blob.type, data: String(reader.result).split(',')[1] });
+          reader.onerror = () => reject(new Error('تعذر قراءة الصورة'));
+          reader.readAsDataURL(blob);
+        };
+        // WebP where supported; older Safari silently returns PNG, so fall back to JPEG there
+        canvas.toBlob((blob) => {
+          if (blob && blob.type === 'image/webp') return finish(blob);
+          canvas.toBlob(finish, 'image/jpeg', 0.85);
+        }, 'image/webp', 0.85);
+      };
+      img.onerror = () => { URL.revokeObjectURL(src); reject(new Error('الملف ليس صورة صالحة')); };
+      img.src = src;
+    });
+  }
+
+  async function addFiles(files) {
+    show($('formMsg'), '');
+    const room = MAX_IMAGES - state.images.length;
+    const list = Array.from(files).filter((f) => /^image\/(jpeg|png|webp)$/.test(f.type)).slice(0, room);
+    if (!list.length) {
+      if (room <= 0) show($('formMsg'), 'وصلت للحد الأقصى: 10 صور.');
+      else show($('formMsg'), 'اختر صور بصيغة JPG أو PNG أو WEBP.');
+      return;
+    }
+    for (const file of list) {
+      const entry = { preview: URL.createObjectURL(file), url: '' };
+      state.images.push(entry);
+      renderThumbs();
+      state.uploading++;
+      updateSaveBtn();
+      try {
+        const { type, data } = await compress(file);
+        const { url } = await api('upload', { contentType: type, data });
+        entry.url = url;
+      } catch (err) {
+        state.images = state.images.filter((x) => x !== entry);
+        show($('formMsg'), `فشل رفع صورة: ${err.message}`);
+      } finally {
+        URL.revokeObjectURL(entry.preview);
+        state.uploading--;
+        updateSaveBtn();
+        renderThumbs();
+      }
+    }
+  }
+
+  const drop = $('drop');
+  drop.addEventListener('click', () => $('fileInput').click());
+  drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('fileInput').click(); } });
+  $('fileInput').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
+  ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('drag'); }));
+  drop.addEventListener('drop', (e) => addFiles(e.dataTransfer.files));
+
+  // ---------- form ----------
+  function updateSaveBtn() {
+    const btn = $('saveBtn');
+    btn.disabled = state.uploading > 0;
+    btn.textContent = state.uploading > 0
+      ? 'جاري رفع الصور...'
+      : (state.editingId ? 'حفظ التعديلات' : 'إضافة المنتج');
+  }
+
+  function resetForm() {
+    state.editingId = null;
+    state.images = [];
+    $('productForm').reset();
+    $('isActive').checked = true;
+    $('formTitle').textContent = 'إضافة منتج';
+    $('cancelEditBtn').hidden = true;
+    renderThumbs();
+    updateSaveBtn();
+  }
+
+  function startEdit(p) {
+    state.editingId = p.id;
+    state.images = p.images.map((url) => ({ url, preview: url }));
+    $('title').value = p.title;
+    $('price').value = p.price;
+    $('description').value = p.description || '';
+    document.querySelector(`input[name=sheet][value=${p.sheet_target}]`).checked = true;
+    $('isActive').checked = p.is_active;
+    $('formTitle').textContent = 'تعديل منتج';
+    $('cancelEditBtn').hidden = false;
+    show($('formMsg'), '');
+    renderThumbs();
+    updateSaveBtn();
+    $('title').focus();
+    $('productForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  $('cancelEditBtn').addEventListener('click', () => { resetForm(); show($('formMsg'), ''); });
+
+  $('productForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    show($('formMsg'), '');
+
+    const payload = {
+      title: $('title').value.trim(),
+      price: Number($('price').value),
+      images: state.images.filter((x) => x.url).map((x) => x.url),
+      description: $('description').value.trim(),
+      sheet_target: document.querySelector('input[name=sheet]:checked').value,
+      is_active: $('isActive').checked,
+    };
+    if (payload.title.length < 2) return show($('formMsg'), 'اكتب اسم المنتج.');
+    if (!(payload.price > 0)) return show($('formMsg'), 'اكتب سعر المنتج.');
+    if (!payload.images.length) return show($('formMsg'), 'أضف صورة واحدة على الأقل.');
+
+    const btn = $('saveBtn');
+    btn.disabled = true;
+    try {
+      const wasEditing = Boolean(state.editingId);
+      if (wasEditing) await api('update', { id: state.editingId, ...payload });
+      else await api('create', payload);
+      resetForm();
+      show($('formMsg'), wasEditing
+        ? 'تم حفظ التعديلات. يتحدث بالمتجر خلال 5 دقائق تقريباً.'
+        : 'تمت إضافة المنتج. يظهر بالمتجر خلال 5 دقائق تقريباً.', 'ok');
+      await loadList();
+    } catch (err) {
+      show($('formMsg'), err.message);
+    } finally {
+      updateSaveBtn();
+    }
+  });
+
+  // ---------- boot ----------
+  if (store.get()) enterApp(); else logout();
+})();
+</script>
+</body>
+</html>

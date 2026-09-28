@@ -1,0 +1,46 @@
+/* Cairo Font - Self-Hosted Local WOFF2 */
+
+/* Cairo Regular 400 */
+@font-face {
+  font-family: 'Cairo';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/cairo/cairo-400.woff2') format('woff2');
+}
+
+/* Cairo Medium 500 */
+@font-face {
+  font-family: 'Cairo';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/cairo/cairo-500.woff2') format('woff2');
+}
+
+/* Cairo SemiBold 600 */
+@font-face {
+  font-family: 'Cairo';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/cairo/cairo-600.woff2') format('woff2');
+}
+
+/* Cairo Bold 700 */
+@font-face {
+  font-family: 'Cairo';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/cairo/cairo-700.woff2') format('woff2');
+}
+
+/* Cairo ExtraBold 800 */
+@font-face {
+  font-family: 'Cairo';
+  font-style: normal;
+  font-weight: 800;
+  font-display: swap;
+  src: url('/fonts/cairo/cairo-800.woff2') format('woff2');
+}

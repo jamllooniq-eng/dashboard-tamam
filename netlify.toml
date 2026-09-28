@@ -1,0 +1,70 @@
+[build]
+  command = "npm run build"
+  publish = "dist/client"
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- . ':!video-map.json' ':!video-sync-state.json'"
+[build.environment]
+  NODE_VERSION = "20"
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  included_files = ["dist/client/index.html"]
+[images]
+  remote_images = ["https://mojod\\.app/.*", "https://.*\\.mojod\\.app/.*", "https://rolemall\\.com/.*", "https://.*\\.rolemall\\.com/.*", "https://.*\\.supabase\\.co/.*"]
+[[redirects]]
+  from = "/api/products"
+  to = "/.netlify/functions/products"
+  status = 200
+[[redirects]]
+  from = "/api/categories"
+  to = "/.netlify/functions/categories"
+  status = 200
+[[redirects]]
+  from = "/api/product-details"
+  to = "/.netlify/functions/product-details"
+  status = 200
+[[redirects]]
+  from = "/api/checkout"
+  to = "/.netlify/functions/checkout"
+  status = 200
+[[redirects]]
+  from = "/api/meta-config"
+  to = "/.netlify/functions/meta-config"
+  status = 200
+[[redirects]]
+  from = "/fonts/*"
+  to = "/fonts/:splat"
+  status = 200
+[[redirects]]
+  from = "/assets/*"
+  to = "/assets/:splat"
+  status = 200
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "/.netlify/functions/sitemap"
+  status = 200
+[[redirects]]
+  from = "/robots.txt"
+  to = "/.netlify/functions/robots"
+  status = 200
+[[redirects]]
+  from = "/feed.xml"
+  to = "/.netlify/functions/feed"
+  status = 200
+[[redirects]]
+  from = "/admin"
+  to = "/admin.html"
+  status = 200
+[[redirects]]
+  from = "/api/admin"
+  to = "/.netlify/functions/admin"
+  status = 200
+[[headers]]
+  for = "/admin.html"
+  [headers.values]
+    Cache-Control = "no-store"
+    X-Robots-Tag = "noindex, nofollow"
+    X-Frame-Options = "DENY"
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/ssr"
+  status = 200
