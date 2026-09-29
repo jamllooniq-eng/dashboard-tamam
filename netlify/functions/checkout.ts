@@ -8,6 +8,9 @@ import {
   resolveVerifiedProduct,
   signInternalPayload,
   UNVERIFIED_PRICE_NOTE,
+  sendToGoogleSheetsWithRetry,
+  sendToTelegramWithRetry,
+  sheetLabel,
 } from '../../server/checkout.server';
 
 export const handler: Handler = async (event) => {
@@ -167,21 +170,59 @@ export const handler: Handler = async (event) => {
       }
     } catch (err) {
       console.error('CRITICAL: Failed to trigger background checkout function entirely:', err);
-      // Last-resort safety net: the background function itself never got invoked,
-      // so send an emergency alert directly from here before the customer gets a success response.
-      try {
-        const botToken = process.env.TELEGRAM_BOT_TOKEN;
-        const chatId = process.env.TELEGRAM_CHAT_ID;
-        if (botToken && chatId) {
-          const emergencyMsg = `🚨🚨 طلب لم يُسجَّل إطلاقاً (فشل حرج بالبنية التحتية)\n\nرقم الطلب: ${orderId}\nالاسم: ${name}\nالهاتف: ${normalizedPhone}\nالمحافظة: ${governorate}\nالعنوان: ${address}\nالمنتج: #${itemId}\n\n⚠️ هذا الطلب لم يصل لأي نظام (لا Google Sheets ولا التنبيه العادي). تواصل مع الزبون يدوياً فوراً باستخدام رقم الهاتف أعلاه.`;
-          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: emergencyMsg }),
-          });
+      // Fallback: the background function couldn't be reached (e.g. site protection, network),
+      // so record the order right here instead of losing it. The customer waits a moment longer.
+      const sheetData = {
+        orderId,
+        productName,
+        name,
+        phone: normalizedPhone,
+        governorate,
+        address,
+        productId: itemId,
+        quantity: count,
+        totalPrice: expectedTotal,
+        notes: notes || 'بدون ملاحظات',
+        createdAt: baghdadTime,
+      };
+      const telegramMsg = `📦 المنتج: ${productName}
+
+🗂️ الشيت: ${sheetLabel(verified.sheetTarget)}
+
+الاسم: ${name}
+
+الهاتف: ${normalizedPhone}
+
+المحافظة: ${governorate}
+
+العنوان: ${address}
+
+العدد: ${count}
+
+المبلغ الإجمالي: ${expectedTotal.toLocaleString('en-US')} د.ع${verified.priceVerified ? '' : `\n\n${UNVERIFIED_PRICE_NOTE}`}`;
+
+      const [sheetsOk, telegramOk] = await Promise.all([
+        sendToGoogleSheetsWithRetry(sheetData, [0, 500, 1500], verified.sheetTarget),
+        sendToTelegramWithRetry(telegramMsg, [0, 500]),
+      ]);
+
+      if (!sheetsOk) {
+        try {
+          const botToken = process.env.TELEGRAM_BOT_TOKEN;
+          const chatId = process.env.TELEGRAM_CHAT_ID;
+          if (botToken && chatId) {
+            const emergencyMsg = `🚨🚨 طلب لم يُسجَّل بالشيت\n\nرقم الطلب: ${orderId}\nالاسم: ${name}\nالهاتف: ${normalizedPhone}\nالمحافظة: ${governorate}\nالعنوان: ${address}\nالمنتج: #${itemId}\n\n⚠️ تواصل مع الزبون يدوياً فوراً.`;
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chatId, text: emergencyMsg }),
+            });
+          }
+        } catch (alertErr) {
+          console.error('Even the last-resort emergency alert failed:', alertErr);
         }
-      } catch (alertErr) {
-        console.error('Even the last-resort emergency alert failed:', alertErr);
+      } else if (!telegramOk) {
+        console.error(`Order ${orderId} recorded in sheet via fallback, but Telegram failed.`);
       }
     }
 
