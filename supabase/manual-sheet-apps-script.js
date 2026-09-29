@@ -1,66 +1,64 @@
 /**
  * تمام شوب - سكربت الشيت الآخر (طلبات المنتجات اليدوية)
  *
- * طريقة التركيب:
- * 1) افتح الشيت الجديد > Extensions > Apps Script
- * 2) احذف أي كود موجود والصق هذا الملف كاملاً ثم احفظ
- * 3) Deploy > New deployment > نوع: Web app
- *      Execute as: Me
- *      Who has access: Anyone
- * 4) انسخ رابط Web app وضعه في Netlify باسم GOOGLE_SHEET_WEBHOOK_URL_MANUAL
+ * الأعمدة بنفس ترتيب شيت الطلبات الحالي:
+ * اسم المنتج | اسم المستلم | الرقم | المحافظة | العنوان | معرف المنتج | الكمية | السعر الكلي | الملاحظات | التاريخ
  *
- * يمنع تكرار نفس رقم الطلب، ويتجاهل نفس الرقم + نفس المنتج خلال 5 دقائق.
+ * يكتب في أول تبويب بالشيت. إذا كان الشيت فارغاً يضيف العناوين تلقائياً.
+ * يمنع التكرار بدون أي أعمدة إضافية (نفس الرقم + نفس المنتج خلال 5 دقائق يُتجاهل).
+ *
+ * بعد أي تعديل على هذا الكود:
+ * Deploy > Manage deployments > ✏️ > Version: New version > Deploy
+ * (الرابط يبقى نفسه)
  */
 
-const SHEET_NAME = 'الطلبات';
-const HEADERS = ['رقم الطلب', 'التاريخ', 'المنتج', 'رقم المنتج', 'الاسم', 'الهاتف', 'المحافظة', 'العنوان', 'العدد', 'المبلغ الإجمالي', 'ملاحظات', 'الحالة'];
-const DUPLICATE_WINDOW_MIN = 5;
+const HEADERS = ['اسم المنتج', 'اسم المستلم', 'الرقم', 'المحافظة', 'العنوان', 'معرف المنتج', 'الكمية', 'السعر الكلي', 'الملاحظات', 'التاريخ'];
+const DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
+const ORDER_ID_MEMORY_MS = 60 * 60 * 1000;
+const TIMEZONE = 'Asia/Baghdad';
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const order = JSON.parse(e.postData.contents);
-    const sheet = getSheet_();
-
-    // Look at the most recent rows only (fast, and nothing grows forever)
-    const lastRow = sheet.getLastRow();
-    const recentCount = Math.min(300, Math.max(0, lastRow - 1));
-    const recent = recentCount > 0
-      ? sheet.getRange(lastRow - recentCount + 1, 1, recentCount, HEADERS.length + 1).getValues()
-      : [];
     const now = Date.now();
-    const phone = String(order.phone || '');
-    const productId = String(order.productId || '');
 
-    for (const row of recent) {
-      // 1) Same order ID already recorded (e.g. a retry) -> ignore
-      if (order.orderId && String(row[0]) === String(order.orderId)) {
-        return json_({ ok: true, duplicate: true });
-      }
-      // 2) Same phone + same product within 5 minutes -> ignore
-      const rowPhone = String(row[5]).replace(/^'/, '');
-      const rowTime = Number(row[HEADERS.length]) || 0; // hidden timestamp column
-      if (rowPhone === phone && String(row[3]) === productId && now - rowTime < DUPLICATE_WINDOW_MIN * 60 * 1000) {
-        return json_({ ok: true, duplicate: true });
-      }
+    // Duplicate memory kept in script properties (small; old entries removed every time)
+    const props = PropertiesService.getScriptProperties();
+    const memory = readMemory_(props, now);
+
+    // 1) Same order sent twice (automatic retry) -> ignore
+    if (order.orderId && memory.ids[order.orderId]) {
+      return json_({ ok: true, duplicate: true });
     }
 
+    // 2) Same phone + same product within 5 minutes -> ignore
+    const dupKey = String(order.phone || '') + '_' + String(order.productId || '');
+    if (memory.recent[dupKey] && now - memory.recent[dupKey] < DUPLICATE_WINDOW_MS) {
+      return json_({ ok: true, duplicate: true });
+    }
+
+    const sheet = getSheet_();
+    const phone = String(order.phone || '').replace(/^0/, ''); // 07701234567 -> 7701234567 (same as current sheet)
+
     sheet.appendRow([
-      order.orderId || '',
-      order.createdAt || new Date(),
       order.productName || '',
-      productId,
       order.name || '',
-      "'" + phone, // keep the leading 0
+      phone ? Number(phone) : '',
       order.governorate || '',
       order.address || '',
-      order.quantity || 1,
-      order.totalPrice || 0,
-      order.notes || '',
-      'جديد',
-      now, // hidden column used for the 5-minute duplicate check
+      order.productId || '',
+      Number(order.quantity) || 1,
+      Number(order.totalPrice) || 0,
+      '', // الملاحظات: تبقى فارغة
+      Utilities.formatDate(new Date(), TIMEZONE, 'yyyy-MM-dd H:mm:ss'),
     ]);
+
+    if (order.orderId) memory.ids[order.orderId] = now;
+    memory.recent[dupKey] = now;
+    props.setProperty('memory', JSON.stringify(memory));
+
     return json_({ ok: true });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
@@ -69,15 +67,27 @@ function doPost(e) {
   }
 }
 
+function readMemory_(props, now) {
+  let memory = { ids: {}, recent: {} };
+  try {
+    memory = JSON.parse(props.getProperty('memory') || '{}');
+  } catch (e) {}
+  memory.ids = memory.ids || {};
+  memory.recent = memory.recent || {};
+  Object.keys(memory.ids).forEach(function (k) {
+    if (now - memory.ids[k] > ORDER_ID_MEMORY_MS) delete memory.ids[k];
+  });
+  Object.keys(memory.recent).forEach(function (k) {
+    if (now - memory.recent[k] > DUPLICATE_WINDOW_MS) delete memory.recent[k];
+  });
+  return memory;
+}
+
 function getSheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_NAME);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  if (sheet.getLastRow() === 0) {
     sheet.appendRow(HEADERS);
     sheet.setFrozenRows(1);
-    sheet.setRightToLeft(true);
-    sheet.hideColumns(HEADERS.length + 1); // timestamp helper column
   }
   return sheet;
 }

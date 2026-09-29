@@ -5,7 +5,6 @@ import {
   sendFailureAlert,
   verifyInternalSignature,
   sheetLabel,
-  UNVERIFIED_PRICE_NOTE,
 } from '../../server/checkout.server';
 
 // Background functions may run up to 15 minutes, so the Google Sheet (main order record)
@@ -79,7 +78,7 @@ export const handler: Handler = async (event) => {
       phone,
       governorate,
       address,
-      productId: itemId,
+      productId: payload.sheetProductId || itemId,
       quantity: quantity || 1,
       totalPrice: totalPrice || 0,
       notes: notes || 'بدون ملاحظات',
@@ -87,9 +86,7 @@ export const handler: Handler = async (event) => {
     };
 
     // 2. Prepare Telegram Message (simplified, order-facing layout)
-    const telegramMsg = `📦 المنتج: ${productName || 'منتج تمام شوب'}
-
-🗂️ الشيت: ${sheetLabel(sheetTarget)}
+    const telegramMsg = `📦 المنتج: ${productName || 'منتج تمام شوب'}${sheetTarget === 'other' ? `\n\n🗂️ الشيت: ${sheetLabel(sheetTarget)}` : ''}
 
 الاسم: ${name}
 
@@ -101,7 +98,7 @@ export const handler: Handler = async (event) => {
 
 العدد: ${quantity || 1}
 
-المبلغ الإجمالي: ${Number(totalPrice || 0).toLocaleString('en-US')} د.ع${priceVerified === false ? `\n\n${UNVERIFIED_PRICE_NOTE}` : ''}`;
+المبلغ الإجمالي: ${Number(totalPrice || 0).toLocaleString('en-US')} د.ع`;
 
     const productPageUrl = `${(process.env.APP_URL || 'https://tamam-iq.com').replace(/\/+$/, '')}/product/${itemId}`;
 

@@ -58,7 +58,7 @@ export interface OrderResult {
 export type PolicyType = 'privacy' | 'terms' | 'returns' | 'about';
 
 export interface SSRRoute {
-  view: 'home' | 'product' | '404' | 'unavailable';
+  view: 'home' | 'product' | '404' | 'unavailable' | 'success';
   productId?: string;
   category?: string;
   search?: string;

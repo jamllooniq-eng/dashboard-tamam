@@ -1,5 +1,5 @@
 export interface ParsedRoute {
-  view: 'home' | 'product' | '404' | 'unavailable';
+  view: 'home' | 'product' | '404' | 'unavailable' | 'success';
   productId?: string;
   category?: string;
   search?: string;
@@ -44,7 +44,12 @@ export function parseRoute(
     }
   }
 
-  // 2. Home Route: / or /index.html
+  // 2. Thank-you page after an order: /success
+  if (cleanPath === '/success') {
+    return { view: 'success' };
+  }
+
+  // 3. Home Route: / or /index.html
   if (cleanPath === '' || cleanPath === '/' || cleanPath === '/index.html') {
     const category = searchParams.get('category') || undefined;
     const search = searchParams.get('q') || searchParams.get('search') || undefined;

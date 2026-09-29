@@ -12,10 +12,14 @@ create table if not exists public.manual_products (
   description  text,
   images       jsonb       not null default '[]'::jsonb,
   sheet_target text        not null default 'other' check (sheet_target in ('rolemall', 'other')),
+  product_code text,
   is_active    boolean     not null default true,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+
+-- معرف المنتج الذي يظهر بعمود "معرف المنتج" في الشيت (اختياري)
+alter table public.manual_products add column if not exists product_code text;
 
 create index if not exists manual_products_active_idx
   on public.manual_products (is_active, created_at desc);
@@ -40,3 +44,8 @@ on conflict (id) do update
   set public = true,
       file_size_limit = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
+
+-- 5) صلاحيات المفتاح السري على الجداول (مطلوبة في مشاريع Supabase الجديدة)
+grant usage on schema public to service_role;
+grant all on table public.manual_products, public.cache_entries to service_role;
+grant usage, select on all sequences in schema public to service_role;

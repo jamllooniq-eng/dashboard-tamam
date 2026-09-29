@@ -2,7 +2,7 @@ import { RolemallProduct, RolemallCategory } from './types';
 import { getOptimizedImageUrl } from './lib/image';
 
 export interface GenerateSeoOptions {
-  view: 'home' | 'product' | '404' | 'unavailable';
+  view: 'home' | 'product' | '404' | 'unavailable' | 'success';
   product?: RolemallProduct | null;
   category?: RolemallCategory | null;
   categoryName?: string;
@@ -77,6 +77,10 @@ export function generateHeadTags(options: GenerateSeoOptions): string {
   } else if (options.view === 'unavailable') {
     title = `تعذّر تحميل المنتج مؤقتاً | ${siteName}`;
     description = 'قد يكون هناك ضغط مؤقت على الخادم. يرجى تحديث الصفحة خلال لحظات.';
+  } else if (options.view === 'success') {
+    title = `تم استلام طلبك | ${siteName}`;
+    description = 'شكراً لطلبك من تمام شوب. سنتصل بك قريباً لتأكيد الطلب.';
+    canonicalUrl = `${baseUrl}/success`;
   } else if (options.view === '404') {
     title = `الصفحة غير موجودة | ${siteName}`;
     description = 'عذراً، الصفحة المطلوبة غير متوفرة أو تم نقلها.';
@@ -103,6 +107,11 @@ export function generateHeadTags(options: GenerateSeoOptions): string {
     `<meta name="twitter:description" content="${safeDesc}" />`,
     `<meta name="twitter:image" content="${safeImage}" />`,
   ];
+
+  if (options.view === 'success') {
+    // Personal confirmation page: keep it out of search engines
+    tags.push(`<meta name="robots" content="noindex, nofollow" />`);
+  }
 
   if (jsonLd) {
     tags.push(

@@ -12,6 +12,8 @@ import path from 'path';
 import {
   kvGet,
   kvSet,
+  kvSetMany,
+  kvDeleteMany,
   listActiveManualProducts,
   getManualProduct,
   manualRowToProduct,
@@ -78,6 +80,21 @@ async function getPersistedCache<T>(key: string): Promise<CacheEntry<T> | null> 
   return null;
 }
 
+/** Forget a product everywhere (memory, disk, Supabase) once the supplier confirms it's gone. */
+async function purgeProduct(pId: string): Promise<void> {
+  memoryCache.productDetails.delete(pId);
+  try {
+    const filePath = path.join(CACHE_DIR, `${`product_${pId}`.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch {
+    // ignore
+  }
+  if (catalogSnapshot) {
+    catalogSnapshot.products = catalogSnapshot.products.filter((p) => String(p.id) !== pId);
+  }
+  await kvDeleteMany([`product_${pId}`]);
+}
+
 async function setPersistedCache<T>(key: string, entry: CacheEntry<T>): Promise<void> {
   setDiskCache(key, entry);
   await kvSet(key, entry.data, entry.timestamp);
@@ -112,6 +129,26 @@ const inFlightRequests = new Map<string, Promise<any>>();
 const notFoundCache = new Map<string, number>();
 const NOT_FOUND_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const VALID_PRODUCT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+// Full-catalog snapshot written by the hourly sync (netlify/functions/sync-catalog.ts).
+// Used as the last line of defence when Rolemall is down: every product that existed
+// at the last successful sync stays visible with its last known price.
+const CATALOG_KEY = 'catalog_all';
+let catalogSnapshot: { products: RolemallProduct[]; loadedAt: number } | null = null;
+const CATALOG_MEMORY_TTL_MS = 10 * 60 * 1000;
+
+async function loadCatalogSnapshot(): Promise<RolemallProduct[]> {
+  const now = Date.now();
+  if (catalogSnapshot && now - catalogSnapshot.loadedAt < CATALOG_MEMORY_TTL_MS) {
+    return catalogSnapshot.products;
+  }
+  const remote = await kvGet<RolemallProduct[]>(CATALOG_KEY);
+  if (remote && Array.isArray(remote.data)) {
+    catalogSnapshot = { products: remote.data, loadedAt: now };
+    return remote.data;
+  }
+  return catalogSnapshot?.products || [];
+}
 
 // Rate-limiting tracking & cooldown
 let rateLimitedUntil = 0;
@@ -275,6 +312,18 @@ function normalizeProduct(raw: any, categoryNameMap?: Map<string, string>): Role
  * Resilient Fetcher with retry on 429 and network errors
  */
 async function resilientFetch(url: string, maxRetries = 2): Promise<Response> {
+  // Test switch: set SIMULATE_ROLEMALL_DOWN=true in Netlify to see how the site behaves
+  // when the supplier is unreachable. Never leave it on in production.
+  if (String(process.env.SIMULATE_ROLEMALL_DOWN || '').toLowerCase() === 'true') {
+    throw new Error('Simulated Rolemall outage (SIMULATE_ROLEMALL_DOWN=true)');
+  }
+
+  // Without the token Rolemall answers with demo products instead of an error.
+  // Treat it as an outage so the saved copy is shown and never overwritten with demo data.
+  if (!SUPPLIER_API_TOKEN && !url.includes('/categories')) {
+    throw new Error('ROLEMALL_API_TOKEN missing: serving saved products');
+  }
+
   let lastError: any = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -607,10 +656,18 @@ async function fetchProductsDirect(
         return cached.data;
       }
 
-      // If specific search or category query has no cache, search inside our general cached products
-      if (memoryCache.products.size > 0) {
+      // If this exact page was never cached, build it from everything we have:
+      // cached lists in memory + the full-catalog snapshot from the hourly sync
+      const snapshot = await loadCatalogSnapshot();
+      if (memoryCache.products.size > 0 || snapshot.length > 0) {
         const allCachedProducts: RolemallProduct[] = [];
         const seen = new Set<string>();
+        for (const p of snapshot) {
+          if (!seen.has(String(p.id))) {
+            seen.add(String(p.id));
+            allCachedProducts.push(p);
+          }
+        }
         for (const entry of memoryCache.products.values()) {
           for (const p of entry.data.products) {
             if (!seen.has(String(p.id))) {
@@ -732,6 +789,9 @@ async function fetchProductDetailsDirect(pId: string, allowRescue = true): Promi
     const RESCUE_PAGE_LIMIT = 100;
     const RESCUE_MAX_PAGES = 15; // covers up to 1500 products
 
+    // "Not found" is only trusted after scanning the whole catalog successfully;
+    // an interrupted scan (network/rate limit) means "temporarily unavailable" instead.
+    let scanComplete = false;
     if (isExplicitlyNotFound && allowRescue) {
       for (let rescuePage = 1; rescuePage <= RESCUE_MAX_PAGES && !rescueFound; rescuePage++) {
         try {
@@ -748,7 +808,10 @@ async function fetchProductDetailsDirect(pId: string, allowRescue = true): Promi
           const rescueDataObj = rescueJson.data || rescueJson;
           const rescueList = Array.isArray(rescueDataObj.products) ? rescueDataObj.products : (Array.isArray(rescueDataObj) ? rescueDataObj : []);
 
-          if (rescueList.length === 0) break;
+          if (rescueList.length === 0) {
+            scanComplete = true;
+            break;
+          }
 
           const rescueRaw = rescueList.find((p: any) => String(p._id || p.id) === pId);
           if (rescueRaw) {
@@ -758,7 +821,10 @@ async function fetchProductDetailsDirect(pId: string, allowRescue = true): Promi
             }
           }
 
-          if (rescueList.length < RESCUE_PAGE_LIMIT) break;
+          if (rescueList.length < RESCUE_PAGE_LIMIT) {
+            scanComplete = true;
+            break;
+          }
         } catch (rescuePageErr: any) {
           console.warn(`Notice: Rescue page ${rescuePage} fetch failed for product ${pId}:`, rescuePageErr?.message || rescuePageErr);
           break;
@@ -781,8 +847,16 @@ async function fetchProductDetailsDirect(pId: string, allowRescue = true): Promi
       }
     }
 
-    if (isExplicitlyNotFound) {
+    if (isExplicitlyNotFound && scanComplete) {
+      // Confirmed gone at the supplier: remove every saved copy so it can't be shown or ordered
+      await purgeProduct(pId);
       return { product: null, status: 'not_found' };
+    }
+
+    // Supplier unreachable: use the full-catalog snapshot (last known product & price)
+    const fromSnapshot = (await loadCatalogSnapshot()).find((p) => String(p.id) === pId);
+    if (fromSnapshot) {
+      return { product: fromSnapshot, status: 'found' };
     }
 
     return { product: null, status: 'temporarily_unavailable' };
@@ -863,8 +937,9 @@ async function getRolemallProductDetails(productId: string | number): Promise<Pr
     fetchResult = retryFetch;
   }
 
-  // 4. Final Fallback: If live fetch failed but we have any older cache entry, serve it to prevent broken UI
-  if (cached) {
+  // 4. Final Fallback: supplier temporarily unreachable -> serve the older copy (last known price).
+  //    Never for a confirmed "not found": a product removed at the supplier must disappear.
+  if (cached && fetchResult.status === 'temporarily_unavailable') {
     return { product: cached.data, status: 'found' };
   }
 
@@ -935,4 +1010,136 @@ export async function getProductDetails(productId: string | number): Promise<Pro
     return { product: null, status: 'not_found' };
   }
   return getRolemallProductDetails(productId);
+}
+
+
+// ===========================================================================
+// Hourly full-catalog sync (called by netlify/functions/sync-catalog.ts)
+// ===========================================================================
+
+const SYNC_PAGE_LIMIT = 100;
+const SYNC_MAX_PAGES = 40; // up to 4000 products
+const SYNC_CONCURRENCY = 4;
+
+async function fetchCatalogPage(page: number): Promise<{ items: any[]; pages: number } | null> {
+  const params = new URLSearchParams();
+  params.set('token', SUPPLIER_API_TOKEN);
+  params.set('limit', String(SYNC_PAGE_LIMIT));
+  params.set('page', String(page));
+  const res = await resilientFetch(`${BASE_URL}/products?${params.toString()}`, 1);
+  if (!res.ok) return null;
+  const json = await res.json();
+  const dataObj = json.data || json;
+  const items = Array.isArray(dataObj.products) ? dataObj.products : Array.isArray(dataObj) ? dataObj : [];
+  const total = Number(dataObj.total || json.total || 0);
+  const pages = Number(dataObj.pages || json.pages || (total ? Math.ceil(total / SYNC_PAGE_LIMIT) : 0));
+  return { items, pages };
+}
+
+export interface CatalogSyncResult {
+  ok: boolean;
+  products: number;
+  pages: number;
+  reason?: string;
+}
+
+/**
+ * Downloads every Rolemall product and saves:
+ * - catalog_all: the full list (fallback for any page, category, search or product)
+ * - product_<id>: one row per product (fast product pages)
+ * Refuses to overwrite a good snapshot with an empty or suspiciously small one.
+ */
+export async function syncFullCatalog(): Promise<CatalogSyncResult> {
+  if (!SUPPLIER_API_TOKEN) return { ok: false, products: 0, pages: 0, reason: 'ROLEMALL_API_TOKEN missing' };
+
+  const categories = await getCategories().catch(() => []);
+  if (categories.length === 0 && memoryCache.categoryMap.size === 0) {
+    // Names only; products still sync without them
+    console.warn('[sync] categories unavailable, continuing without category names');
+  }
+
+  const first = await fetchCatalogPage(1).catch(() => null);
+  if (!first || first.items.length === 0) {
+    return { ok: false, products: 0, pages: 0, reason: 'Rolemall unavailable or empty' };
+  }
+
+  const totalPages = Math.min(
+    SYNC_MAX_PAGES,
+    first.pages > 0 ? first.pages : first.items.length < SYNC_PAGE_LIMIT ? 1 : SYNC_MAX_PAGES
+  );
+
+  const rawItems: any[] = [...first.items];
+  let failedPages = 0;
+  let reachedEnd = first.items.length < SYNC_PAGE_LIMIT;
+
+  for (let start = 2; start <= totalPages && !reachedEnd; start += SYNC_CONCURRENCY) {
+    const batch: number[] = [];
+    for (let p = start; p < start + SYNC_CONCURRENCY && p <= totalPages; p++) batch.push(p);
+    const results = await Promise.all(batch.map((p) => fetchCatalogPage(p).catch(() => null)));
+    for (const r of results) {
+      if (!r) {
+        failedPages++;
+        continue;
+      }
+      rawItems.push(...r.items);
+      if (r.items.length < SYNC_PAGE_LIMIT) reachedEnd = true;
+    }
+  }
+
+  if (failedPages > 0) {
+    // A partial download would drop products from the snapshot: keep the previous one
+    return { ok: false, products: rawItems.length, pages: totalPages, reason: `${failedPages} page(s) failed` };
+  }
+
+  const seen = new Set<string>();
+  const products: RolemallProduct[] = [];
+  for (const raw of rawItems) {
+    const p = normalizeProduct(raw, memoryCache.categoryMap);
+    if (p && !seen.has(String(p.id))) {
+      seen.add(String(p.id));
+      products.push(p);
+    }
+  }
+
+  if (products.length === 0) {
+    return { ok: false, products: 0, pages: totalPages, reason: 'no valid products' };
+  }
+
+  const previous = await kvGet<RolemallProduct[]>(CATALOG_KEY);
+  const previousCount = Array.isArray(previous?.data) ? previous!.data.length : 0;
+  if (previousCount > 20 && products.length < previousCount * 0.3) {
+    return {
+      ok: false,
+      products: products.length,
+      pages: totalPages,
+      reason: `only ${products.length} products vs ${previousCount} last time; keeping previous snapshot`,
+    };
+  }
+
+  const now = Date.now();
+  const catalogOk = await kvSetMany([{ key: CATALOG_KEY, data: products }], now);
+  if (catalogOk && previousCount > 0) {
+    // Products that disappeared from the supplier since the last sync: delete their saved pages
+    const currentIds = new Set(products.map((p) => String(p.id)));
+    const removedKeys = previous!.data
+      .map((p) => String(p.id))
+      .filter((id) => !currentIds.has(id))
+      .map((id) => `product_${id}`);
+    if (removedKeys.length > 0) {
+      await kvDeleteMany(removedKeys);
+      removedKeys.forEach((k) => memoryCache.productDetails.delete(k.slice('product_'.length)));
+      console.log(`[sync] Removed ${removedKeys.length} product(s) no longer at the supplier`);
+    }
+  }
+  if (!catalogOk) return { ok: false, products: products.length, pages: totalPages, reason: 'saving catalog failed' };
+
+  // Per-product rows in chunks
+  const rows = products.map((p) => ({ key: `product_${p.id}`, data: p }));
+  const CHUNK = 250;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    await kvSetMany(rows.slice(i, i + CHUNK), now);
+  }
+
+  catalogSnapshot = { products, loadedAt: now };
+  return { ok: true, products: products.length, pages: totalPages };
 }

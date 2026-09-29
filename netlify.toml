@@ -8,6 +8,8 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
   included_files = ["dist/client/index.html"]
+[functions."sync-catalog"]
+  schedule = "@hourly"
 [images]
   remote_images = ["https://mojod\\.app/.*", "https://.*\\.mojod\\.app/.*", "https://rolemall\\.com/.*", "https://.*\\.rolemall\\.com/.*", "https://.*\\.supabase\\.co/.*"]
 [[redirects]]

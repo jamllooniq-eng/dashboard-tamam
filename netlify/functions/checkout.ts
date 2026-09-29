@@ -7,11 +7,11 @@ import {
   resolveOrderId,
   resolveVerifiedProduct,
   signInternalPayload,
-  UNVERIFIED_PRICE_NOTE,
   sendToGoogleSheetsWithRetry,
   sendToTelegramWithRetry,
   sheetLabel,
 } from '../../server/checkout.server';
+import { sendMetaCapiPurchase } from '../../server/meta.server';
 
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -86,7 +86,8 @@ export const handler: Handler = async (event) => {
     const expectedTotal = unitPrice * count;
     const productName = verified.productName;
     const rawNotes = String(body.note || '').trim();
-    const notes = verified.priceVerified ? rawNotes : [UNVERIFIED_PRICE_NOTE, rawNotes].filter(Boolean).join(' | ');
+    // Price comes from the supplier, or the last saved price if the supplier is down; no warning note
+    const notes = rawNotes;
 
     // 2. Duplicate Check within 5 minutes (Synchronous & Fast)
     const duplicateKey = `${normalizedPhone}_${itemId}`;
@@ -147,6 +148,7 @@ export const handler: Handler = async (event) => {
       notes,
       priceVerified: verified.priceVerified,
       sheetTarget: verified.sheetTarget,
+      sheetProductId: verified.sheetProductId || itemId,
       baghdadTime,
       fbc: body.fbc,
       fbp: body.fbp,
@@ -179,15 +181,13 @@ export const handler: Handler = async (event) => {
         phone: normalizedPhone,
         governorate,
         address,
-        productId: itemId,
+        productId: verified.sheetProductId || itemId,
         quantity: count,
         totalPrice: expectedTotal,
         notes: notes || 'بدون ملاحظات',
         createdAt: baghdadTime,
       };
-      const telegramMsg = `📦 المنتج: ${productName}
-
-🗂️ الشيت: ${sheetLabel(verified.sheetTarget)}
+      const telegramMsg = `📦 المنتج: ${productName}${verified.sheetTarget === 'other' ? `\n\n🗂️ الشيت: ${sheetLabel(verified.sheetTarget)}` : ''}
 
 الاسم: ${name}
 
@@ -199,11 +199,30 @@ export const handler: Handler = async (event) => {
 
 العدد: ${count}
 
-المبلغ الإجمالي: ${expectedTotal.toLocaleString('en-US')} د.ع${verified.priceVerified ? '' : `\n\n${UNVERIFIED_PRICE_NOTE}`}`;
+المبلغ الإجمالي: ${expectedTotal.toLocaleString('en-US')} د.ع`;
 
+      const productPageUrl = `${(process.env.APP_URL || siteUrl).replace(/\/+$/, '')}/product/${itemId}`;
       const [sheetsOk, telegramOk] = await Promise.all([
-        sendToGoogleSheetsWithRetry(sheetData, [0, 500, 1500], verified.sheetTarget),
+        sendToGoogleSheetsWithRetry(sheetData, [0, 500], verified.sheetTarget),
         sendToTelegramWithRetry(telegramMsg, [0, 500]),
+        // Keep Meta server-side Purchase tracking even on this fallback path (same event_id as the Pixel)
+        sendMetaCapiPurchase({
+          eventName: 'Purchase',
+          eventId: orderId,
+          orderId,
+          productName,
+          productId: itemId,
+          totalPriceIqd: expectedTotal,
+          count,
+          customerName: name,
+          phone: normalizedPhone,
+          governorate,
+          clientIp,
+          userAgent,
+          fbc: body.fbc,
+          fbp: body.fbp,
+          sourceUrl: productPageUrl,
+        }).catch(() => false),
       ]);
 
       if (!sheetsOk) {

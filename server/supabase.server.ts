@@ -20,6 +20,8 @@ export interface ManualProductRow {
   description: string | null;
   images: string[];
   sheet_target: SheetTarget;
+  /** Optional code written to the sheet's "معرف المنتج" column instead of m-<id> */
+  product_code: string | null;
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
@@ -96,11 +98,52 @@ export async function kvSet<T>(key: string, data: T, timestamp = Date.now()): Pr
   }
 }
 
+/** Upsert many cache rows in one request (used by the hourly catalog sync). */
+export async function kvSetMany(entries: { key: string; data: unknown }[], timestamp = Date.now()): Promise<boolean> {
+  if (!isSupabaseConfigured() || entries.length === 0) return true;
+  const updated_at = new Date(timestamp).toISOString();
+  try {
+    const res = await sbFetch(
+      '/rest/v1/cache_entries?on_conflict=key',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify(entries.map((e) => ({ key: e.key, data: e.data, updated_at }))),
+      },
+      15000
+    );
+    if (!res.ok) {
+      console.error(`[Supabase] batch upsert failed (${res.status}): ${await res.text()}`);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.error('[Supabase] batch upsert error:', err?.message || err);
+    return false;
+  }
+}
+
+/** Delete cache rows (used when a product no longer exists at the supplier). */
+export async function kvDeleteMany(keys: string[]): Promise<void> {
+  if (!isSupabaseConfigured() || keys.length === 0) return;
+  for (let i = 0; i < keys.length; i += 100) {
+    const chunk = keys.slice(i, i + 100).map((k) => `"${k.replace(/"/g, '')}"`).join(',');
+    try {
+      await sbFetch(`/rest/v1/cache_entries?key=in.(${encodeURIComponent(chunk)})`, { method: 'DELETE' }, 10000);
+    } catch {
+      // best effort
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Manual products
 // ---------------------------------------------------------------------------
 
-const MANUAL_COLUMNS = 'id,title,price,description,images,sheet_target,is_active,created_at,updated_at';
+const MANUAL_COLUMNS = 'id,title,price,description,images,sheet_target,product_code,is_active,created_at,updated_at';
 const MANUAL_CACHE_TTL_MS = 60 * 1000;
 let manualCache: { rows: ManualProductRow[]; timestamp: number } | null = null;
 
@@ -112,6 +155,7 @@ function sanitizeRow(raw: any): ManualProductRow {
     description: raw.description ? String(raw.description) : null,
     images: Array.isArray(raw.images) ? raw.images.filter((u: any) => typeof u === 'string' && u) : [],
     sheet_target: raw.sheet_target === 'rolemall' ? 'rolemall' : 'other',
+    product_code: raw.product_code ? String(raw.product_code) : null,
     is_active: raw.is_active !== false,
     created_at: raw.created_at,
     updated_at: raw.updated_at,
@@ -191,6 +235,7 @@ export interface ManualProductInput {
   description: string | null;
   images: string[];
   sheet_target: SheetTarget;
+  product_code: string | null;
   is_active: boolean;
 }
 

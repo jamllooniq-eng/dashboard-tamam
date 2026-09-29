@@ -65,6 +65,8 @@ export interface VerifiedProductResult {
   priceVerified?: boolean;
   /** Which Google Sheet receives this order */
   sheetTarget?: SheetTarget;
+  /** Value for the sheet's "معرف المنتج" column */
+  sheetProductId?: string;
 }
 
 /** Webhook URL for each sheet. Manual products can be routed to a separate sheet. */
@@ -99,6 +101,7 @@ export async function resolveVerifiedProduct(
         productName: row.title,
         priceVerified: true,
         sheetTarget: row.sheet_target,
+        sheetProductId: row.product_code || itemId,
       };
     }
     if (!failed) {
@@ -111,6 +114,7 @@ export async function resolveVerifiedProduct(
       productName: clientProductName,
       priceVerified: false,
       sheetTarget: 'other',
+      sheetProductId: itemId,
     };
   }
 
@@ -131,6 +135,7 @@ export async function resolveVerifiedProduct(
       productName: result.product.title,
       priceVerified: true,
       sheetTarget: 'rolemall',
+      sheetProductId: itemId,
     };
   }
 
@@ -144,6 +149,7 @@ export async function resolveVerifiedProduct(
     productName: clientProductName,
     priceVerified: false,
     sheetTarget: 'rolemall',
+    sheetProductId: itemId,
   };
 }
 
@@ -356,7 +362,8 @@ export async function processOrder(
   const expectedTotal = unitPrice * count;
   const productName = verified.productName;
   const rawNotes = String(payload.note || '').trim();
-  const notes = verified.priceVerified ? rawNotes : [UNVERIFIED_PRICE_NOTE, rawNotes].filter(Boolean).join(' | ');
+  // Price comes from the supplier, or the last saved price if the supplier is down; no warning note
+    const notes = rawNotes;
 
   // 2. Duplicate Check within 5 minutes
   const duplicateKey = `${normalizedPhone}_${itemId}`;
@@ -401,7 +408,7 @@ export async function processOrder(
       phone: normalizedPhone,
       governorate,
       address,
-      productId: itemId,
+      productId: verified.sheetProductId || itemId,
       quantity: count,
       totalPrice: expectedTotal,
       notes: notes || 'بدون ملاحظات',
@@ -409,9 +416,7 @@ export async function processOrder(
     };
 
     // Telegram formatted message (simplified, order-facing layout)
-    const telegramMsg = `📦 المنتج: ${productName}
-
-🗂️ الشيت: ${sheetLabel(verified.sheetTarget)}
+    const telegramMsg = `📦 المنتج: ${productName}${verified.sheetTarget === 'other' ? `\n\n🗂️ الشيت: ${sheetLabel(verified.sheetTarget)}` : ''}
 
 الاسم: ${name}
 
@@ -423,7 +428,7 @@ export async function processOrder(
 
 العدد: ${count}
 
-المبلغ الإجمالي: ${expectedTotal.toLocaleString('en-US')} د.ع${verified.priceVerified ? '' : `\n\n${UNVERIFIED_PRICE_NOTE}`}`;
+المبلغ الإجمالي: ${expectedTotal.toLocaleString('en-US')} د.ع`;
 
     const productPageUrl = `${(process.env.APP_URL || 'https://tamam-iq.com').replace(/\/+$/, '')}/product/${itemId}`;
 

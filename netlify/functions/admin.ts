@@ -107,6 +107,15 @@ function parseProductInput(body: any, partial = false): { value?: Partial<Manual
     out.sheet_target = body.sheet_target;
   }
 
+  if (!partial || body.product_code !== undefined) {
+    const code = String(body.product_code ?? '').trim();
+    if (code.length > 64) return { error: 'معرف المنتج طويل جداً (الحد 64 حرف).' };
+    if (code && !/^[\p{L}\p{N}_.\-\/# ]+$/u.test(code)) {
+      return { error: 'معرف المنتج يقبل حروف وأرقام و - _ . / # فقط.' };
+    }
+    out.product_code = code || null;
+  }
+
   if (!partial || body.is_active !== undefined) {
     out.is_active = body.is_active !== false;
   }

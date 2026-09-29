@@ -23,6 +23,35 @@ const LazyPolicyModal = lazy(() =>
   import('./components/policy/PolicyModal').then((m) => ({ default: m.PolicyModal }))
 );
 
+// ---- Thank-you page persistence (this browser tab only) ----
+const SAVED_ORDER_KEY = 'tamam_last_order';
+
+function saveOrder(value: unknown): void {
+  try {
+    sessionStorage.setItem(SAVED_ORDER_KEY, JSON.stringify(value));
+  } catch {
+    // storage blocked: the page still shows, it just won't survive a refresh
+  }
+}
+
+function readSavedOrder(): any | null {
+  try {
+    const raw = sessionStorage.getItem(SAVED_ORDER_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && parsed.orderId && parsed.orderDetails?.product ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearSavedOrder(): void {
+  try {
+    sessionStorage.removeItem(SAVED_ORDER_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 interface AppProps {
   ssrRoute?: SSRRoute;
   ssrData?: SSRData;
@@ -63,6 +92,9 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
 
   const [activePolicy, setActivePolicy] = useState<PolicyType | null>(null);
 
+  // /success is its own URL; the order details are kept in sessionStorage so a refresh keeps the page
+  const [isSuccessRoute, setIsSuccessRoute] = useState<boolean>(() => ssrRoute?.view === 'success');
+
   // Ref to skip duplicate initial client fetch if already supplied by SSR
   const isFirstMount = useRef(true);
 
@@ -85,6 +117,21 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
   // Initialize Meta Pixel on client load
   useEffect(() => {
     initMetaPixel();
+  }, []);
+
+  // Landing directly on /success (refresh, or back button): restore the order from this tab's storage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (parseRoute(window.location.pathname, window.location.search).view !== 'success') return;
+    const saved = readSavedOrder();
+    if (saved) {
+      setOrderSuccess(saved);
+      setIsSuccessRoute(true);
+    } else {
+      // No order in this tab (someone opened /success directly): go to the store
+      window.history.replaceState(null, '', '/');
+      setIsSuccessRoute(false);
+    }
   }, []);
 
   // Fetch Categories on client if not provided by SSR (and ONLY if not in a product view)
@@ -152,6 +199,24 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
       const currentSearch = window.location.search;
       const parsed = parseRoute(currentPath, currentSearch);
 
+      if (parsed.view === 'success') {
+        const saved = readSavedOrder();
+        if (saved) {
+          setOrderSuccess(saved);
+          setIsSuccessRoute(true);
+        } else {
+          window.history.replaceState(null, '', '/');
+          setOrderSuccess(null);
+          setIsSuccessRoute(false);
+          setSelectedProduct(null);
+        }
+        return;
+      }
+
+      // Leaving the thank-you page with the back/forward buttons
+      setOrderSuccess(null);
+      setIsSuccessRoute(false);
+
       if (parsed.view === 'product' && parsed.productId) {
         if (!selectedProduct || String(selectedProduct.id) !== String(parsed.productId)) {
           fetchAndSetProduct(parsed.productId, false);
@@ -209,6 +274,7 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
           setNotFoundState({ active: false, type: 'product' });
           setIsUnavailable(false);
           setOrderSuccess(null);
+    setIsSuccessRoute(false);
 
           // Update Client SEO & JSON-LD
           updatePageSEO(prod.title, prod.description, prod.image);
@@ -257,6 +323,7 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
     setNotFoundState({ active: false, type: 'product' });
     setIsUnavailable(false);
     setOrderSuccess(null);
+    setIsSuccessRoute(false);
 
     // Client SEO & Pixel Tracking
     updatePageSEO(product.title, product.description, product.image);
@@ -289,6 +356,8 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
     setNotFoundState({ active: false, type: 'page' });
     setIsUnavailable(false);
     setOrderSuccess(null);
+    setIsSuccessRoute(false);
+    clearSavedOrder();
     if (typeof window !== 'undefined') {
       window.history.pushState(null, '', '/');
     }
@@ -302,6 +371,7 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
     setNotFoundState({ active: false, type: 'page' });
     setIsUnavailable(false);
     setOrderSuccess(null);
+    setIsSuccessRoute(false);
     if (typeof window !== 'undefined') {
       const newUrl = q ? `/?q=${encodeURIComponent(q)}` : '/';
       window.history.pushState(null, '', newUrl);
@@ -316,6 +386,7 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
     setNotFoundState({ active: false, type: 'page' });
     setIsUnavailable(false);
     setOrderSuccess(null);
+    setIsSuccessRoute(false);
     if (typeof window !== 'undefined') {
       const newUrl = catId ? `/?category=${encodeURIComponent(catId)}` : '/';
       window.history.pushState(null, '', newUrl);
@@ -346,10 +417,14 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
     }
   ) => {
     if (result.orderId) {
-      setOrderSuccess({
-        orderId: result.orderId,
-        orderDetails,
-      });
+      const success = { orderId: result.orderId, orderDetails };
+      saveOrder(success);
+      setOrderSuccess(success);
+      setIsSuccessRoute(true);
+      if (typeof window !== 'undefined') {
+        window.history.pushState(null, '', '/success');
+      }
+      updatePageSEO('تم استلام طلبك');
     }
   };
 
@@ -391,6 +466,11 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
         </Suspense>
       </div>
     );
+  }
+
+  // /success opened before the saved order is read (first paint / hydration): plain white page
+  if (isSuccessRoute) {
+    return <div className="min-h-screen bg-white" />;
   }
 
   // VIEW 2.1: Temporarily Unavailable Screen

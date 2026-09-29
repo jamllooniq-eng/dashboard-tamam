@@ -266,6 +266,12 @@
         </div>
 
         <div class="field">
+          <label for="productCode">معرف المنتج <span style="font-weight:400;color:var(--muted)">(اختياري)</span></label>
+          <input id="productCode" type="text" maxlength="64" dir="ltr" style="text-align:right" />
+          <div class="hint">يظهر بعمود "معرف المنتج" بالشيت. إذا تركته فارغ، يظهر رقم تلقائي مثل m-1.</div>
+        </div>
+
+        <div class="field">
           <span class="label">الطلبات تروح إلى</span>
           <div class="sheets">
             <label class="sheet-opt">
@@ -403,6 +409,7 @@
           <div class="item-title">${esc(p.title)}</div>
           <div class="item-meta">
             <span class="item-price">${fmt(p.price)} د.ع</span>
+            <span>المعرف: ${esc(p.product_code || 'm-' + p.id)}</span>
             <span class="tag ${p.sheet_target === 'other' ? 'other' : ''}">${p.sheet_target === 'other' ? 'الشيت الآخر' : 'شيت رولمول'}</span>
             ${p.is_active ? '' : '<span class="tag">مخفي</span>'}
           </div>
@@ -555,6 +562,7 @@
     $('title').value = p.title;
     $('price').value = p.price;
     $('description').value = p.description || '';
+    $('productCode').value = p.product_code || '';
     document.querySelector(`input[name=sheet][value=${p.sheet_target}]`).checked = true;
     $('isActive').checked = p.is_active;
     $('formTitle').textContent = 'تعديل منتج';
@@ -576,6 +584,7 @@
       price: Number($('price').value),
       images: state.images.filter((x) => x.url).map((x) => x.url),
       description: $('description').value.trim(),
+      product_code: $('productCode').value.trim(),
       sheet_target: document.querySelector('input[name=sheet]:checked').value,
       is_active: $('isActive').checked,
     };

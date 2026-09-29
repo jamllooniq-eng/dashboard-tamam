@@ -85,6 +85,8 @@ export async function render(url: string, baseUrl?: string): Promise<RenderResul
         status = 503;
         parsed.view = 'unavailable';
       }
+    } else if (parsed.view === 'success') {
+      // Thank-you page: order details live in the visitor's browser (sessionStorage), nothing to fetch
     } else if (parsed.view === 'home') {
       const page = parsed.page || 1;
       const [catList, prodResult] = await Promise.all([
