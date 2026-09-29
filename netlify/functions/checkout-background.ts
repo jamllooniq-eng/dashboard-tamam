@@ -12,6 +12,7 @@ import {
 // (which used to duplicate the Telegram message and the Meta Purchase event).
 const SHEETS_RETRY_DELAYS_MS = [0, 1000, 3000, 8000, 20000, 45000];
 import { sendMetaCapiPurchase } from '../../server/meta.server';
+import { sendTikTokEvent } from '../../server/tiktok.server';
 
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -121,6 +122,22 @@ export const handler: Handler = async (event) => {
         userAgent,
         fbc,
         fbp,
+        sourceUrl: productPageUrl,
+      }).catch(() => false),
+      // No-op unless TikTok is configured; same orderId as the browser pixel event_id
+      sendTikTokEvent({
+        event: 'CompletePayment',
+        eventId: orderId,
+        productId: itemId,
+        productName: productName || 'منتج تمام شوب',
+        priceIqd: (totalPrice || 0) / Math.max(1, quantity || 1),
+        count: quantity || 1,
+        totalPriceIqd: totalPrice || 0,
+        clientIp,
+        userAgent,
+        ttp: typeof payload.ttp === 'string' ? payload.ttp : undefined,
+        ttclid: typeof payload.ttclid === 'string' ? payload.ttclid : undefined,
+        phone,
         sourceUrl: productPageUrl,
       }).catch(() => false),
     ]);

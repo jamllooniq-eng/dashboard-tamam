@@ -119,6 +119,22 @@ export const App: React.FC<AppProps> = ({ ssrRoute, ssrData, HomeViewSync }) => 
     initMetaPixel();
   }, []);
 
+  // Ad visitors land directly on /product/:id (rendered by the server), which never goes through
+  // handleSelectProduct / fetchAndSetProduct. Send their ViewContent once, here.
+  const landingViewContentSent = useRef(false);
+  useEffect(() => {
+    if (landingViewContentSent.current) return;
+    landingViewContentSent.current = true;
+    if (ssrRoute?.view === 'product' && selectedProduct) {
+      trackViewContent({
+        id: selectedProduct.id,
+        title: selectedProduct.title,
+        price: selectedProduct.price,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Landing directly on /success (refresh, or back button): restore the order from this tab's storage
   useEffect(() => {
     if (typeof window === 'undefined') return;

@@ -47,19 +47,54 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
-async function sbFetch(pathAndQuery: string, init: RequestInit = {}, timeoutMs = 6000): Promise<Response> {
+/**
+ * Circuit breaker: Supabase is only a backup for the storefront. If it fails or hangs once,
+ * this function instance stops calling it for a minute, so visitors never wait on it and
+ * Rolemall products keep loading at full speed.
+ */
+const BREAKER_COOLDOWN_MS = 60 * 1000;
+let breakerOpenUntil = 0;
+
+export function isSupabaseReachable(): boolean {
+  return Date.now() >= breakerOpenUntil;
+}
+
+function tripBreaker(reason: string): void {
+  if (Date.now() >= breakerOpenUntil) {
+    console.warn(`[Supabase] unreachable (${reason}); pausing calls for 60s. Rolemall keeps serving products.`);
+  }
+  breakerOpenUntil = Date.now() + BREAKER_COOLDOWN_MS;
+}
+
+async function sbFetch(
+  pathAndQuery: string,
+  init: RequestInit = {},
+  timeoutMs = 6000,
+  bypassBreaker = false
+): Promise<Response> {
+  if (!bypassBreaker && !isSupabaseReachable()) {
+    throw new Error('Supabase temporarily skipped (recent failure)');
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(`${SUPABASE_URL}${pathAndQuery}`, {
+    const res = await fetch(`${SUPABASE_URL}${pathAndQuery}`, {
       ...init,
       signal: controller.signal,
       headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) },
     });
+    if (res.status >= 500) tripBreaker(`HTTP ${res.status}`);
+    return res;
+  } catch (err: any) {
+    tripBreaker(err?.name === 'AbortError' ? 'timeout' : err?.message || 'network error');
+    throw err;
   } finally {
     clearTimeout(timer);
   }
 }
+
+// Storefront calls use a short timeout: a slow backup must never slow the shop down
+const STOREFRONT_TIMEOUT_MS = 1500;
 
 // ---------------------------------------------------------------------------
 // Persistent cache (key/value)
@@ -71,7 +106,7 @@ export async function kvGet<T>(key: string): Promise<{ data: T; timestamp: numbe
     const res = await sbFetch(
       `/rest/v1/cache_entries?key=eq.${encodeURIComponent(key)}&select=data,updated_at&limit=1`,
       {},
-      3000
+      STOREFRONT_TIMEOUT_MS
     );
     if (!res.ok) return null;
     const rows = await res.json();
@@ -92,7 +127,7 @@ export async function kvSet<T>(key: string, data: T, timestamp = Date.now()): Pr
         Prefer: 'resolution=merge-duplicates,return=minimal',
       },
       body: JSON.stringify({ key, data, updated_at: new Date(timestamp).toISOString() }),
-    });
+    }, STOREFRONT_TIMEOUT_MS);
   } catch {
     // Best effort only: the site keeps working from memory/disk cache
   }
@@ -144,7 +179,9 @@ export async function kvDeleteMany(keys: string[]): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const MANUAL_COLUMNS = 'id,title,price,description,images,sheet_target,product_code,is_active,created_at,updated_at';
-const MANUAL_CACHE_TTL_MS = 60 * 1000;
+const MANUAL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 min: new products show within the same window as the page cache
+// Product cards only need these fields (descriptions are loaded on the product page itself)
+const MANUAL_LIST_COLUMNS = 'id,title,price,images,is_active,created_at';
 let manualCache: { rows: ManualProductRow[]; timestamp: number } | null = null;
 
 function sanitizeRow(raw: any): ManualProductRow {
@@ -192,9 +229,9 @@ export async function listActiveManualProducts(): Promise<ManualProductRow[]> {
   }
   try {
     const res = await sbFetch(
-      `/rest/v1/manual_products?is_active=eq.true&select=${MANUAL_COLUMNS}&order=created_at.desc`,
+      `/rest/v1/manual_products?is_active=eq.true&select=${MANUAL_LIST_COLUMNS}&order=created_at.desc`,
       {},
-      3000
+      STOREFRONT_TIMEOUT_MS
     );
     if (res.ok) {
       const rows = ((await res.json()) as any[]).map(sanitizeRow);
@@ -224,7 +261,7 @@ export async function getManualProduct(id: number): Promise<{ row: ManualProduct
 // ---- Admin CRUD ----
 
 export async function adminListManualProducts(): Promise<ManualProductRow[]> {
-  const res = await sbFetch(`/rest/v1/manual_products?select=${MANUAL_COLUMNS}&order=created_at.desc`);
+  const res = await sbFetch(`/rest/v1/manual_products?select=${MANUAL_COLUMNS}&order=created_at.desc`, {}, 8000, true);
   if (!res.ok) throw new Error(`Supabase list failed (${res.status}): ${await res.text()}`);
   return ((await res.json()) as any[]).map(sanitizeRow);
 }
@@ -244,7 +281,7 @@ export async function adminCreateManualProduct(input: ManualProductInput): Promi
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
     body: JSON.stringify(input),
-  });
+  }, 8000, true);
   if (!res.ok) throw new Error(`Supabase insert failed (${res.status}): ${await res.text()}`);
   manualCache = null;
   const rows = await res.json();
@@ -252,22 +289,87 @@ export async function adminCreateManualProduct(input: ManualProductInput): Promi
 }
 
 export async function adminUpdateManualProduct(id: number, input: Partial<ManualProductInput>): Promise<ManualProductRow> {
+  // Remember the current images so any image removed in this edit can be deleted from storage
+  const before = input.images ? await adminGetManualProductRaw(id).catch(() => null) : null;
   const res = await sbFetch(`/rest/v1/manual_products?id=eq.${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', Prefer: 'return=representation' },
     body: JSON.stringify({ ...input, updated_at: new Date().toISOString() }),
-  });
+  }, 8000, true);
   if (!res.ok) throw new Error(`Supabase update failed (${res.status}): ${await res.text()}`);
   manualCache = null;
   const rows = await res.json();
   if (!rows[0]) throw new Error('Product not found');
-  return sanitizeRow(rows[0]);
+  const updated = sanitizeRow(rows[0]);
+
+  if (before && input.images) {
+    const kept = new Set(updated.images);
+    await deleteUnreferencedImages(before.images.filter((url) => !kept.has(url)));
+  }
+  return updated;
 }
 
 export async function adminDeleteManualProduct(id: number): Promise<void> {
-  const res = await sbFetch(`/rest/v1/manual_products?id=eq.${id}`, { method: 'DELETE' });
+  // 1) Read the product's images BEFORE deleting it
+  const existing = await adminGetManualProductRaw(id).catch(() => null);
+
+  // 2) Delete the product row first: if image cleanup fails later, the worst case is a leftover
+  //    file, never a product pointing to missing images
+  const res = await sbFetch(`/rest/v1/manual_products?id=eq.${id}`, { method: 'DELETE' }, 8000, true);
   if (!res.ok) throw new Error(`Supabase delete failed (${res.status}): ${await res.text()}`);
   manualCache = null;
+
+  // 3) Then remove its image files (best effort, never fails the delete)
+  if (existing) await deleteUnreferencedImages(existing.images);
+}
+
+async function adminGetManualProductRaw(id: number): Promise<ManualProductRow | null> {
+  const res = await sbFetch(`/rest/v1/manual_products?id=eq.${id}&select=${MANUAL_COLUMNS}&limit=1`, {}, 8000, true);
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return Array.isArray(rows) && rows[0] ? sanitizeRow(rows[0]) : null;
+}
+
+/** Only files inside OUR public bucket can be deleted; any other URL is ignored. */
+function storageObjectName(url: string): string | null {
+  const prefix = `${SUPABASE_URL}/storage/v1/object/public/${IMAGE_BUCKET}/`;
+  if (!url || !url.startsWith(prefix)) return null;
+  const name = decodeURIComponent(url.slice(prefix.length).split('?')[0]);
+  // Uploads are flat "<timestamp>-<random>.<ext>" names; refuse anything path-like
+  if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..')) return null;
+  return name;
+}
+
+/**
+ * Delete image files that no remaining product uses (an image can be shared between products).
+ * Best effort: logs and returns on any error.
+ */
+async function deleteUnreferencedImages(urls: string[]): Promise<void> {
+  try {
+    const candidates = [...new Set(urls)].filter((u) => storageObjectName(u) !== null);
+    if (candidates.length === 0) return;
+
+    const all = await adminListManualProducts();
+    const stillUsed = new Set(all.flatMap((p) => p.images));
+    const names = candidates.filter((u) => !stillUsed.has(u)).map((u) => storageObjectName(u)!) ;
+    if (names.length === 0) return;
+
+    const res = await sbFetch(
+      `/storage/v1/object/${IMAGE_BUCKET}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefixes: names }),
+      },
+      10000,
+      true
+    );
+    if (!res.ok) {
+      console.warn(`[Supabase] image cleanup failed (${res.status}): ${await res.text()}`);
+    }
+  } catch (err: any) {
+    console.warn('[Supabase] image cleanup error:', err?.message || err);
+  }
 }
 
 // ---- Images ----
@@ -281,7 +383,8 @@ export async function uploadProductImage(bytes: Buffer, contentType: string, ext
       headers: { 'Content-Type': contentType, 'Cache-Control': 'max-age=31536000', 'x-upsert': 'false' },
       body: bytes,
     },
-    20000
+    20000,
+    true
   );
   if (!res.ok) throw new Error(`Image upload failed (${res.status}): ${await res.text()}`);
   return `${SUPABASE_URL}/storage/v1/object/public/${IMAGE_BUCKET}/${name}`;

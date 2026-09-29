@@ -59,6 +59,30 @@ function cleanCategory(cat: RolemallCategory): RolemallCategory {
   return clean;
 }
 
+// Only these query parameters change what a page shows. Everything else (fbclid, utm_*, gclid...)
+// is tracking noise: it must not create new cache entries or appear in canonical URLs.
+export const MEANINGFUL_QUERY_PARAMS = ['q', 'search', 'category', 'page'];
+
+// A product page never makes a customer wait longer than this for the supplier.
+// Past it, the branded "temporarily unavailable" page is shown (before Netlify's own function timeout).
+const PRODUCT_SSR_BUDGET_MS = 7000;
+
+function withTimeBudget<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      }
+    );
+  });
+}
+
 export async function render(url: string, baseUrl?: string): Promise<RenderResult> {
   const [pathname, queryString] = url.split('?');
   const searchParams = new URLSearchParams(queryString || '');
@@ -74,7 +98,11 @@ export async function render(url: string, baseUrl?: string): Promise<RenderResul
   try {
     if (parsed.view === 'product' && parsed.productId) {
       // Fast single-resource fetch for Product Page (No blocking on categories or related products)
-      const result = await getProductDetails(parsed.productId);
+      const result = await withTimeBudget(
+        getProductDetails(parsed.productId),
+        PRODUCT_SSR_BUDGET_MS,
+        { product: null, status: 'temporarily_unavailable' as const }
+      );
       if (result.status === 'found' && result.product) {
         selectedProduct = result.product;
       } else if (result.status === 'not_found') {
@@ -115,14 +143,9 @@ export async function render(url: string, baseUrl?: string): Promise<RenderResul
         );
       }
     } else {
-      // 404
+      // 404: unknown URL (bots, scanners, old links). The Not Found page shows no products,
+      // so nothing is fetched: no supplier calls, instant answer.
       status = 404;
-      const [catList, prodResult] = await Promise.all([
-        getCategories(),
-        getProducts({ limit: 12 }),
-      ]);
-      categories = catList;
-      products = prodResult.products || [];
     }
   } catch (err) {
     console.error('Error during SSR data retrieval:', err);
@@ -165,7 +188,16 @@ export async function render(url: string, baseUrl?: string): Promise<RenderResul
     categoryName: selectedCategoryObj?.name,
     search: parsed.search,
     baseUrl: baseUrl || process.env.APP_URL || 'https://tamam-iq.com',
-    currentUrl: url,
+    currentUrl: (() => {
+      // Canonical without tracking parameters (fbclid, utm_*...)
+      const clean = new URLSearchParams();
+      for (const key of MEANINGFUL_QUERY_PARAMS) {
+        const value = searchParams.get(key);
+        if (value) clean.set(key, value);
+      }
+      const qs = clean.toString();
+      return `${(baseUrl || process.env.APP_URL || 'https://tamam-iq.com').replace(/\/$/, '')}${pathname}${qs ? `?${qs}` : ''}`;
+    })(),
   });
 
   // Minimal Client Hydration Payload - eliminates unused fields and duplicates

@@ -4,6 +4,7 @@ import { IRAQ_GOVERNORATES } from '../../lib/governorates';
 import { normalizeDigits, normalizeIraqiPhone } from '../../lib/phone';
 import { QuantitySelector } from './QuantitySelector';
 import { trackInitiateCheckout, trackPurchase, getMetaCookies } from '../../lib/meta-pixel.client';
+import { getTikTokIds } from '../../lib/tiktok-pixel.client';
 import { User, Phone, MapPin, AlertCircle, Loader2, Send, Truck, ChevronDown, ShieldCheck } from 'lucide-react';
 
 interface OrderFormProps {
@@ -94,6 +95,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({
       // 1. Generate client-side Order ID for instant UI rendering and tracking
       const clientOrderId = `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const { fbp, fbc } = getMetaCookies();
+      const { ttp, ttclid } = getTikTokIds();
 
       const payload = {
         orderId: clientOrderId,
@@ -108,6 +110,8 @@ export const OrderForm: React.FC<OrderFormProps> = ({
         all_price: product.price * quantity,
         fbp: fbp || undefined,
         fbc: fbc || undefined,
+        ttp: ttp || undefined, // TikTok ids: only used if TikTok is configured
+        ttclid: ttclid || undefined,
       };
 
       const res = await fetch('/api/checkout', {

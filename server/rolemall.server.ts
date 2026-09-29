@@ -82,6 +82,12 @@ async function getPersistedCache<T>(key: string): Promise<CacheEntry<T> | null> 
 
 /** Forget a product everywhere (memory, disk, Supabase) once the supplier confirms it's gone. */
 async function purgeProduct(pId: string): Promise<void> {
+  purgeProductLocal(pId);
+  await kvDeleteMany([`product_${pId}`]);
+}
+
+/** Memory + local disk copies only (Supabase rows are deleted separately, in batches). */
+function purgeProductLocal(pId: string): void {
   memoryCache.productDetails.delete(pId);
   try {
     const filePath = path.join(CACHE_DIR, `${`product_${pId}`.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`);
@@ -92,7 +98,11 @@ async function purgeProduct(pId: string): Promise<void> {
   if (catalogSnapshot) {
     catalogSnapshot.products = catalogSnapshot.products.filter((p) => String(p.id) !== pId);
   }
-  await kvDeleteMany([`product_${pId}`]);
+  catalogIds?.ids.delete(pId);
+  // Drop it from any cached list in memory too
+  for (const entry of memoryCache.products.values()) {
+    entry.data.products = entry.data.products.filter((p) => String(p.id) !== pId);
+  }
 }
 
 async function setPersistedCache<T>(key: string, entry: CacheEntry<T>): Promise<void> {
@@ -129,6 +139,10 @@ const inFlightRequests = new Map<string, Promise<any>>();
 const notFoundCache = new Map<string, number>();
 const NOT_FOUND_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const VALID_PRODUCT_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// Rolemall product IDs look like 12815 (or a 24-char hex id). "null", "undefined", "abc" etc. are not IDs.
+const LIKELY_ROLEMALL_ID = /^(\d{1,12}|[a-f0-9]{24})$/i;
+// Trust the synced ID list to rule out a product only if the sync is recent
+const CATALOG_IDS_TRUST_MS = 2 * 60 * 60 * 1000;
 
 // Full-catalog snapshot written by the hourly sync (netlify/functions/sync-catalog.ts).
 // Used as the last line of defence when Rolemall is down: every product that existed
@@ -137,6 +151,27 @@ const CATALOG_KEY = 'catalog_all';
 let catalogSnapshot: { products: RolemallProduct[]; loadedAt: number } | null = null;
 const CATALOG_MEMORY_TTL_MS = 10 * 60 * 1000;
 
+// Small companion row: only the product IDs of the latest sync (a few KB instead of megabytes).
+// Used for every "is this product still at the supplier?" check, to keep Supabase egress tiny.
+const CATALOG_IDS_KEY = 'catalog_ids';
+let catalogIds: { ids: Set<string>; loadedAt: number; syncedAt: number } | null = null;
+
+async function loadCatalogIds(): Promise<Set<string> | null> {
+  const now = Date.now();
+  if (catalogIds && now - catalogIds.loadedAt < CATALOG_MEMORY_TTL_MS) return catalogIds.ids;
+  const remote = await kvGet<string[]>(CATALOG_IDS_KEY);
+  if (remote && Array.isArray(remote.data)) {
+    catalogIds = { ids: new Set(remote.data.map(String)), loadedAt: now, syncedAt: remote.timestamp };
+    return catalogIds.ids;
+  }
+  if (catalogIds) {
+    catalogIds.loadedAt = now; // keep using the last list, retry later
+    return catalogIds.ids;
+  }
+  return null;
+}
+
+/** Full product snapshot: only read when the supplier is actually failing. */
 async function loadCatalogSnapshot(): Promise<RolemallProduct[]> {
   const now = Date.now();
   if (catalogSnapshot && now - catalogSnapshot.loadedAt < CATALOG_MEMORY_TTL_MS) {
@@ -148,6 +183,16 @@ async function loadCatalogSnapshot(): Promise<RolemallProduct[]> {
     return remote.data;
   }
   return catalogSnapshot?.products || [];
+}
+
+/**
+ * During an outage, only trust saved copies of products that were still in the latest
+ * full-catalog sync (so a product removed at the supplier can't come back from an old cache).
+ */
+async function filterToLatestCatalog(list: RolemallProduct[]): Promise<RolemallProduct[]> {
+  const ids = await loadCatalogIds();
+  if (!ids || ids.size === 0) return list; // no sync yet: nothing to compare against
+  return list.filter((p) => ids.has(String(p.id)));
 }
 
 // Rate-limiting tracking & cooldown
@@ -588,7 +633,7 @@ async function fetchProductsDirect(
       if (!res.ok) {
         console.warn(`Rolemall products API returned ${res.status}`);
         if (cached) {
-          return cached.data;
+          return { ...cached.data, products: await filterToLatestCatalog(cached.data.products) };
         }
         throw new Error(`Products API returned status ${res.status}`);
       }
@@ -653,7 +698,7 @@ async function fetchProductsDirect(
       
       // Supplier failed: serve the last known good list, however old
       if (cached) {
-        return cached.data;
+        return { ...cached.data, products: await filterToLatestCatalog(cached.data.products) };
       }
 
       // If this exact page was never cached, build it from everything we have:
@@ -792,6 +837,17 @@ async function fetchProductDetailsDirect(pId: string, allowRescue = true): Promi
     // "Not found" is only trusted after scanning the whole catalog successfully;
     // an interrupted scan (network/rate limit) means "temporarily unavailable" instead.
     let scanComplete = false;
+
+    // The product-details endpoint said "not found". If the hourly sync is recent and doesn't
+    // contain this ID either, that's two independent confirmations: skip the full catalog scan.
+    if (isExplicitlyNotFound && allowRescue) {
+      const ids = await loadCatalogIds();
+      if (ids && catalogIds && Date.now() - catalogIds.syncedAt < CATALOG_IDS_TRUST_MS && !ids.has(pId)) {
+        scanComplete = true;
+        allowRescue = false;
+      }
+    }
+
     if (isExplicitlyNotFound && allowRescue) {
       for (let rescuePage = 1; rescuePage <= RESCUE_MAX_PAGES && !rescueFound; rescuePage++) {
         try {
@@ -839,18 +895,19 @@ async function fetchProductDetailsDirect(pId: string, allowRescue = true): Promi
       return { product: rescueFound, status: 'found' };
     }
 
+    // Confirmed gone at the supplier (full catalog scanned): this wins over any saved copy,
+    // so a removed product can't be shown or ordered from an old list in memory
+    if (isExplicitlyNotFound && scanComplete) {
+      await purgeProduct(pId);
+      return { product: null, status: 'not_found' };
+    }
+
     // Fallback: search across all cached product lists in memory or disk
     for (const entry of memoryCache.products.values()) {
       const found = entry.data.products.find(p => String(p.id) === pId);
-      if (found) {
+      if (found && (await filterToLatestCatalog([found])).length > 0) {
         return { product: found, status: 'found' };
       }
-    }
-
-    if (isExplicitlyNotFound && scanComplete) {
-      // Confirmed gone at the supplier: remove every saved copy so it can't be shown or ordered
-      await purgeProduct(pId);
-      return { product: null, status: 'not_found' };
     }
 
     // Supplier unreachable: use the full-catalog snapshot (last known product & price)
@@ -889,6 +946,13 @@ async function getRolemallProductDetails(productId: string | number): Promise<Pr
   const pId = String(productId).trim();
   if (!pId || !VALID_PRODUCT_ID.test(pId)) return { product: null, status: 'not_found' };
 
+  // Junk like /product/null or /product/undefined: answer immediately, never ask the supplier.
+  // (An unusual-looking ID is still accepted if the latest sync actually contains it.)
+  if (!LIKELY_ROLEMALL_ID.test(pId)) {
+    const ids = await loadCatalogIds();
+    if (!ids || !ids.has(pId)) return { product: null, status: 'not_found' };
+  }
+
   const now = Date.now();
 
   // Recently confirmed missing: answer instantly without touching the API
@@ -915,7 +979,8 @@ async function getRolemallProductDetails(productId: string | number): Promise<Pr
   }
 
   // 2. Stale Cache Hit (< 24 hours): Return cached data immediately & trigger background revalidation
-  if (cached && (now - cached.timestamp < STALE_TTL_MS)) {
+  //    (skipped if the product is no longer in the latest full-catalog sync)
+  if (cached && (now - cached.timestamp < STALE_TTL_MS) && (await filterToLatestCatalog([cached.data])).length > 0) {
     triggerProductDetailsBackgroundRefresh(pId);
     return { product: cached.data, status: 'found' };
   }
@@ -939,7 +1004,7 @@ async function getRolemallProductDetails(productId: string | number): Promise<Pr
 
   // 4. Final Fallback: supplier temporarily unreachable -> serve the older copy (last known price).
   //    Never for a confirmed "not found": a product removed at the supplier must disappear.
-  if (cached && fetchResult.status === 'temporarily_unavailable') {
+  if (cached && fetchResult.status === 'temporarily_unavailable' && (await filterToLatestCatalog([cached.data])).length > 0) {
     return { product: cached.data, status: 'found' };
   }
 
@@ -1105,8 +1170,9 @@ export async function syncFullCatalog(): Promise<CatalogSyncResult> {
     return { ok: false, products: 0, pages: totalPages, reason: 'no valid products' };
   }
 
-  const previous = await kvGet<RolemallProduct[]>(CATALOG_KEY);
-  const previousCount = Array.isArray(previous?.data) ? previous!.data.length : 0;
+  const previous = await kvGet<string[]>(CATALOG_IDS_KEY);
+  const previousIds: string[] = Array.isArray(previous?.data) ? previous!.data.map(String) : [];
+  const previousCount = previousIds.length;
   if (previousCount > 20 && products.length < previousCount * 0.3) {
     return {
       ok: false,
@@ -1117,17 +1183,24 @@ export async function syncFullCatalog(): Promise<CatalogSyncResult> {
   }
 
   const now = Date.now();
-  const catalogOk = await kvSetMany([{ key: CATALOG_KEY, data: products }], now);
+  const newIds = products.map((p) => String(p.id));
+  const catalogOk = await kvSetMany(
+    [
+      { key: CATALOG_KEY, data: products },
+      { key: CATALOG_IDS_KEY, data: newIds },
+    ],
+    now
+  );
+  if (catalogOk) catalogIds = { ids: new Set(newIds), loadedAt: now, syncedAt: now };
   if (catalogOk && previousCount > 0) {
     // Products that disappeared from the supplier since the last sync: delete their saved pages
-    const currentIds = new Set(products.map((p) => String(p.id)));
-    const removedKeys = previous!.data
-      .map((p) => String(p.id))
+    const currentIds = new Set(newIds);
+    const removedKeys = previousIds
       .filter((id) => !currentIds.has(id))
       .map((id) => `product_${id}`);
     if (removedKeys.length > 0) {
       await kvDeleteMany(removedKeys);
-      removedKeys.forEach((k) => memoryCache.productDetails.delete(k.slice('product_'.length)));
+      removedKeys.forEach((k) => purgeProductLocal(k.slice('product_'.length)));
       console.log(`[sync] Removed ${removedKeys.length} product(s) no longer at the supplier`);
     }
   }

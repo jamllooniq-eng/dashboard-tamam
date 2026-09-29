@@ -12,6 +12,7 @@ import {
   sheetLabel,
 } from '../../server/checkout.server';
 import { sendMetaCapiPurchase } from '../../server/meta.server';
+import { sendTikTokEvent } from '../../server/tiktok.server';
 
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== 'POST') {
@@ -152,6 +153,8 @@ export const handler: Handler = async (event) => {
       baghdadTime,
       fbc: body.fbc,
       fbp: body.fbp,
+      ttp: typeof body.ttp === 'string' ? body.ttp : undefined,
+      ttclid: typeof body.ttclid === 'string' ? body.ttclid : undefined,
       clientIp,
       userAgent,
     };
@@ -221,6 +224,22 @@ export const handler: Handler = async (event) => {
           userAgent,
           fbc: body.fbc,
           fbp: body.fbp,
+          sourceUrl: productPageUrl,
+        }).catch(() => false),
+        // No-op unless TikTok is configured
+        sendTikTokEvent({
+          event: 'CompletePayment',
+          eventId: orderId,
+          productId: itemId,
+          productName,
+          priceIqd: unitPrice,
+          count,
+          totalPriceIqd: expectedTotal,
+          clientIp,
+          userAgent,
+          ttp: typeof body.ttp === 'string' ? body.ttp : undefined,
+          ttclid: typeof body.ttclid === 'string' ? body.ttclid : undefined,
+          phone: normalizedPhone,
           sourceUrl: productPageUrl,
         }).catch(() => false),
       ]);

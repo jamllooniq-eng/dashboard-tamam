@@ -1,7 +1,7 @@
 import type { Handler } from '@netlify/functions';
 import fs from 'fs';
 import path from 'path';
-import { render } from '../../src/entry-server';
+import { render, MEANINGFUL_QUERY_PARAMS } from '../../src/entry-server';
 
 let cachedTemplate: string | null = null;
 
@@ -44,16 +44,25 @@ export const handler: Handler = async (event) => {
       .replace('<!--app-html-->', html || '')
       .replace('<!--app-data-->', initialDataScript || '');
 
-    const isSuccess = (status || 200) === 200;
+    const finalStatus = status || 200;
     const headers: Record<string, string> = {
       'Content-Type': 'text/html; charset=utf-8',
     };
+    // Cache key = path + only the parameters that change the page.
+    // An ad click (?fbclid=...) now shares the cached product page instead of forcing a fresh render.
+    const vary = `query=${MEANINGFUL_QUERY_PARAMS.join('|')}`;
 
-    if (isSuccess) {
+    if (finalStatus === 200) {
       headers['Cache-Control'] = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
       headers['Netlify-CDN-Cache-Control'] = 'public, max-age=300, stale-while-revalidate=86400';
-      headers['Netlify-Vary'] = 'query';
+      headers['Netlify-Vary'] = vary;
+    } else if (finalStatus === 404) {
+      // Not Found is stable: keep it at the CDN for a few minutes so repeated bot hits never reach the function
+      headers['Cache-Control'] = 'public, max-age=60';
+      headers['Netlify-CDN-Cache-Control'] = 'public, max-age=600';
+      headers['Netlify-Vary'] = vary;
     } else {
+      // 503 / 500: temporary, never cached
       headers['Cache-Control'] = 'no-store';
     }
 

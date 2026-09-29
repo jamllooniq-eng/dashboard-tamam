@@ -4,6 +4,7 @@
  */
 
 import { normalizeDigits } from './phone';
+import { initTikTokPixel, trackTikTokEvent, captureTikTokClickId, getTikTokIds } from './tiktok-pixel.client';
 
 declare global {
   interface Window {
@@ -15,6 +16,29 @@ declare global {
 let isInitialized = false;
 let currentPixelId = '';
 let currentIqdToUsdRate = 1400;
+
+// Tracking config is fetched once (/api/meta-config). Events fired before it arrives
+// (e.g. ViewContent right when an ad visitor lands) wait for it instead of being dropped.
+let initPromise: Promise<void> | null = null;
+let configLoaded = false;
+
+function whenTrackingReady(fn: () => void): void {
+  if (typeof window === 'undefined') return;
+  if (configLoaded || !initPromise) {
+    fn();
+    return;
+  }
+  initPromise.then(fn, fn);
+}
+
+/**
+ * One ID per customer action, shared by the browser pixel (eventID) and the
+ * server copy (event_id) so Meta — and TikTok later — count the action once.
+ */
+function newEventId(eventName: string, productId: string | number): string {
+  const rand = Math.random().toString(36).slice(2, 10);
+  return `${eventName}_${String(productId).replace(/[^A-Za-z0-9-]/g, '')}_${Date.now()}_${rand}`;
+}
 
 /**
  * Retrieve _fbp and _fbc from browser cookies or query parameters
@@ -82,10 +106,23 @@ export function getMetaCookies(): { fbp?: string; fbc?: string } {
 }
 
 /**
- * Initialize Meta Pixel and capture initial fbclid if present
+ * Initialize Meta Pixel (and TikTok Pixel if configured) and capture click ids.
+ * Safe to call more than once: the config is fetched a single time.
  */
-export async function initMetaPixel(): Promise<void> {
-  if (typeof window === 'undefined' || isInitialized) return;
+export function initMetaPixel(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve();
+  if (!initPromise) {
+    initPromise = runPixelInit().finally(() => {
+      configLoaded = true;
+    });
+  }
+  return initPromise;
+}
+
+async function runPixelInit(): Promise<void> {
+  if (isInitialized) return;
+
+  captureTikTokClickId();
 
   try {
     // Capture fbclid immediately on initial landing
@@ -107,6 +144,11 @@ export async function initMetaPixel(): Promise<void> {
 
     if (data.iqdToUsdRate && typeof data.iqdToUsdRate === 'number') {
       currentIqdToUsdRate = data.iqdToUsdRate;
+    }
+
+    // TikTok is independent from Meta and stays off unless TIKTOK_PIXEL_ID is set
+    if (typeof data.tiktokPixelId === 'string' && data.tiktokPixelId.trim()) {
+      initTikTokPixel(data.tiktokPixelId.trim());
     }
 
     if (!pixelId) return;
@@ -155,23 +197,26 @@ export function trackMetaEvent(
   params: Record<string, unknown> = {},
   eventId?: string
 ): void {
-  if (typeof window === 'undefined' || !window.fbq || !isInitialized) return;
+  if (typeof window === 'undefined') return;
 
-  try {
-    if (eventId) {
-      window.fbq('track', eventName, params, { eventID: eventId });
-    } else {
-      window.fbq('track', eventName, params);
+  whenTrackingReady(() => {
+    if (!window.fbq || !isInitialized) return;
+    try {
+      if (eventId) {
+        window.fbq('track', eventName, params, { eventID: eventId });
+      } else {
+        window.fbq('track', eventName, params);
+      }
+
+      // Debug only — does not send another event
+      console.log(
+        `[Meta Pixel] Tracked ${eventName}${eventId ? ` (ID: ${eventId})` : ''}`,
+        params
+      );
+    } catch {
+      // Ignore tracking errors
     }
-
-    // Debug only — does not send another event
-    console.log(
-      `[Meta Pixel] Tracked ${eventName}${eventId ? ` (ID: ${eventId})` : ''}`,
-      params
-    );
-  } catch {
-    // Ignore tracking errors
-  }
+  });
 }
 
 /**
@@ -183,6 +228,7 @@ export function trackMetaEvent(
  */
 function sendServerCapiEarlyEvent(
   eventName: 'ViewContent' | 'InitiateCheckout',
+  eventId: string,
   productId: string | number,
   productName: string,
   priceIqd: number,
@@ -191,13 +237,13 @@ function sendServerCapiEarlyEvent(
   if (typeof window === 'undefined') return;
   try {
     const { fbp, fbc } = getMetaCookies();
-    const eventId = `evt_${eventName}_${productId}_${Date.now()}`;
+    const { ttp, ttclid } = getTikTokIds();
     fetch('/.netlify/functions/track', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         eventName,
-        eventId,
+        eventId, // same ID as the browser pixel event -> deduplicated
         productId,
         productName,
         priceIqd,
@@ -205,6 +251,8 @@ function sendServerCapiEarlyEvent(
         sourceUrl: window.location.href,
         fbc,
         fbp,
+        ttp,
+        ttclid,
       }),
       keepalive: true,
     }).catch(() => {
@@ -221,16 +269,30 @@ export function trackViewContent(product: {
   price: number;
 }): void {
   const usdValue = Number((product.price / currentIqdToUsdRate).toFixed(2));
+  const eventId = newEventId('ViewContent', product.id);
 
-  trackMetaEvent('ViewContent', {
-    content_ids: [String(product.id)],
-    content_name: product.title,
-    content_type: 'product',
-    value: usdValue,
-    currency: 'USD',
+  trackMetaEvent(
+    'ViewContent',
+    {
+      content_ids: [String(product.id)],
+      content_name: product.title,
+      content_type: 'product',
+      value: usdValue,
+      currency: 'USD',
+    },
+    eventId
+  );
+
+  sendServerCapiEarlyEvent('ViewContent', eventId, product.id, product.title, product.price, 1);
+
+  whenTrackingReady(() => {
+    const unitUsd = Number((product.price / currentIqdToUsdRate).toFixed(2));
+    trackTikTokEvent(
+      'ViewContent',
+      { productId: product.id, productName: product.title, unitUsd, count: 1, valueUsd: unitUsd },
+      eventId
+    );
   });
-
-  sendServerCapiEarlyEvent('ViewContent', product.id, product.title, product.price, 1);
 }
 
 export function trackAddToCart(product: {
@@ -258,17 +320,37 @@ export function trackInitiateCheckout(product: {
   count: number;
 }): void {
   const usdValue = Number(((product.price * product.count) / currentIqdToUsdRate).toFixed(2));
+  const eventId = newEventId('InitiateCheckout', product.id);
 
-  trackMetaEvent('InitiateCheckout', {
-    content_ids: [String(product.id)],
-    content_name: product.title,
-    content_type: 'product',
-    value: usdValue,
-    currency: 'USD',
-    num_items: product.count,
+  trackMetaEvent(
+    'InitiateCheckout',
+    {
+      content_ids: [String(product.id)],
+      content_name: product.title,
+      content_type: 'product',
+      value: usdValue,
+      currency: 'USD',
+      num_items: product.count,
+    },
+    eventId
+  );
+
+  sendServerCapiEarlyEvent('InitiateCheckout', eventId, product.id, product.title, product.price, product.count);
+
+  whenTrackingReady(() => {
+    const unitUsd = Number((product.price / currentIqdToUsdRate).toFixed(2));
+    trackTikTokEvent(
+      'InitiateCheckout',
+      {
+        productId: product.id,
+        productName: product.title,
+        unitUsd,
+        count: product.count,
+        valueUsd: Number(((product.price * product.count) / currentIqdToUsdRate).toFixed(2)),
+      },
+      eventId
+    );
   });
-
-  sendServerCapiEarlyEvent('InitiateCheckout', product.id, product.title, product.price, product.count);
 }
 
 /**
@@ -349,4 +431,17 @@ export function trackPurchase(order: {
       // Ignore tracking errors
     }
   }
+
+  // TikTok (inactive unless configured): same orderId as event_id -> deduplicated with the Events API
+  trackTikTokEvent(
+    'CompletePayment',
+    {
+      productId: order.productId,
+      productName: order.productName,
+      unitUsd: Number(((order.totalPrice / Math.max(1, order.count)) / currentIqdToUsdRate).toFixed(2)),
+      count: order.count,
+      valueUsd: usdValue,
+    },
+    eventId
+  );
 }

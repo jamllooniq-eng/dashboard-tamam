@@ -282,15 +282,20 @@ Sitemap: ${baseUrl}/sitemap.xml
         .replace('<!--app-html-->', html)
         .replace('<!--app-data-->', initialDataScript);
 
-      const isSuccess = (status || 200) === 200;
+      const finalStatus = status || 200;
       const headers: Record<string, string> = {
         'Content-Type': 'text/html; charset=utf-8',
       };
+      const vary = 'query=q|search|category|page';
 
-      if (isSuccess) {
+      if (finalStatus === 200) {
         headers['Cache-Control'] = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
         headers['Netlify-CDN-Cache-Control'] = 'public, max-age=300, stale-while-revalidate=86400';
-        headers['Netlify-Vary'] = 'query';
+        headers['Netlify-Vary'] = vary;
+      } else if (finalStatus === 404) {
+        headers['Cache-Control'] = 'public, max-age=60';
+        headers['Netlify-CDN-Cache-Control'] = 'public, max-age=600';
+        headers['Netlify-Vary'] = vary;
       } else {
         headers['Cache-Control'] = 'no-store';
       }
