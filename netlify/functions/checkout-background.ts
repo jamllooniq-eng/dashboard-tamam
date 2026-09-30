@@ -123,6 +123,7 @@ export const handler: Handler = async (event) => {
         fbc,
         fbp,
         sourceUrl: productPageUrl,
+        externalId: typeof payload.externalId === 'string' ? payload.externalId : undefined,
       }).catch(() => false),
       // No-op unless TikTok is configured; same orderId as the browser pixel event_id
       sendTikTokEvent({

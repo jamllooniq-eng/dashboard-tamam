@@ -1,5 +1,6 @@
 import type { Handler } from '@netlify/functions';
 import { getProducts } from '../../server/rolemall.server';
+import { cachedHeaders, TAG_LISTING } from '../../server/cache.server';
 
 export const handler: Handler = async (event) => {
   try {
@@ -16,9 +17,8 @@ export const handler: Handler = async (event) => {
       statusCode: 200,
       headers: {
         'Content-Type': 'application/json',
-        'Cache-Control': isEmptyMainList ? 'no-store' : 'public, max-age=0, must-revalidate',
-        // Product cards show prices: at most 60s at Netlify, never an expired copy
-        ...(isEmptyMainList ? {} : { 'Netlify-CDN-Cache-Control': 'public, max-age=60' }),
+        // Product cards show prices: tagged "listing", purged whenever any price changes
+        ...(isEmptyMainList ? { 'Cache-Control': 'no-store' } : cachedHeaders([TAG_LISTING])),
       },
       body: JSON.stringify(result),
     };

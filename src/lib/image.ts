@@ -43,3 +43,24 @@ export function getOptimizedImageUrl(
 
   return cdnPath;
 }
+
+// ---------------------------------------------------------------------------
+// Product gallery image (the page's largest element, LCP)
+// One definition shared by the gallery, the <head> preload and the cache warmer,
+// so the browser always downloads exactly one version of the main image.
+// ---------------------------------------------------------------------------
+
+/** Candidate widths: each phone picks the smallest one that is still sharp; never above 800 (today's size). */
+export const GALLERY_IMAGE_WIDTHS = [480, 720, 800];
+/** 72 kept on purpose: 65 saves only ~10% bytes and measurably softens product photos. */
+export const GALLERY_IMAGE_QUALITY = 72;
+/** Gallery is full width minus page padding on phones, max 480px (see ProductGallery). */
+export const GALLERY_IMAGE_SIZES = '(max-width: 504px) calc(100vw - 24px), 480px';
+
+export function getGalleryImage(url: string): { src: string; srcSet: string } {
+  const src = getOptimizedImageUrl(url, { width: 800, quality: GALLERY_IMAGE_QUALITY, fit: 'contain' });
+  const srcSet = GALLERY_IMAGE_WIDTHS.map(
+    (w) => `${getOptimizedImageUrl(url, { width: w, quality: GALLERY_IMAGE_QUALITY, fit: 'contain' })} ${w}w`
+  ).join(', ');
+  return { src, srcSet };
+}

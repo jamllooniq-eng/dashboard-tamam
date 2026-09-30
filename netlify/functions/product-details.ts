@@ -1,5 +1,6 @@
 import type { Handler } from '@netlify/functions';
 import { getProductDetails } from '../../server/rolemall.server';
+import { cachedHeaders, productTag } from '../../server/cache.server';
 
 export const handler: Handler = async (event) => {
   try {
@@ -20,9 +21,8 @@ export const handler: Handler = async (event) => {
         statusCode: 200,
         headers: {
           'Content-Type': 'application/json',
-          // Same rule as product pages: current price on the first request, never an expired copy
-          'Cache-Control': 'public, max-age=0, must-revalidate',
-          'Netlify-CDN-Cache-Control': 'public, max-age=60',
+          // Same policy as the product page, same tag: purged together when the product changes
+          ...cachedHeaders([productTag(result.product.id)]),
         },
         body: JSON.stringify(result.product),
       };

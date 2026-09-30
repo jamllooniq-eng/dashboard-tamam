@@ -3,7 +3,7 @@ import { RolemallProduct, OrderResult } from '../../types';
 import { IRAQ_GOVERNORATES } from '../../lib/governorates';
 import { normalizeDigits, normalizeIraqiPhone } from '../../lib/phone';
 import { QuantitySelector } from './QuantitySelector';
-import { trackInitiateCheckout, trackPurchase, getMetaCookies } from '../../lib/meta-pixel.client';
+import { trackInitiateCheckout, trackPurchase, getMetaCookies, getExternalId } from '../../lib/meta-pixel.client';
 import { getTikTokIds } from '../../lib/tiktok-pixel.client';
 import { User, Phone, MapPin, AlertCircle, Loader2, Send, Truck, ChevronDown, ShieldCheck } from 'lucide-react';
 
@@ -112,6 +112,7 @@ export const OrderForm: React.FC<OrderFormProps> = ({
         fbc: fbc || undefined,
         ttp: ttp || undefined, // TikTok ids: only used if TikTok is configured
         ttclid: ttclid || undefined,
+        externalId: getExternalId(), // hashed anonymous visitor ID (same value the pixel sends)
       };
 
       const res = await fetch('/api/checkout', {

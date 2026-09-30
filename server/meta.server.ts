@@ -26,6 +26,15 @@ interface SendCapiEventParams {
   fbc?: string;
   fbp?: string;
   sourceUrl?: string;
+  /** Anonymous visitor ID, already SHA-256 hashed by the browser (same value as the pixel's external_id) */
+  externalId?: string;
+}
+
+/** external_id for Meta: keep an already-hashed value (from the browser) as-is, otherwise hash it. */
+function externalIdField(value?: string): string[] | undefined {
+  const v = String(value || '').trim().toLowerCase();
+  if (!v || v.length > 128) return undefined;
+  return [/^[a-f0-9]{64}$/.test(v) ? v : sha256(v)];
 }
 
 /**
@@ -119,6 +128,7 @@ export async function sendMetaCapiPurchase(params: SendCapiEventParams): Promise
       fn: metaName ? [sha256(metaName)] : undefined,
       st: metaState ? [sha256(metaState)] : undefined,
       country: [sha256('iq')],
+      external_id: externalIdField(params.externalId),
       client_ip_address: cleanIp || undefined,
       client_user_agent: params.userAgent?.trim() || undefined,
       fbc: (params.fbc && typeof params.fbc === 'string' && params.fbc.trim().startsWith('fb.'))
@@ -207,6 +217,8 @@ interface SendCapiEarlyEventParams {
   fbc?: string;
   fbp?: string;
   sourceUrl?: string;
+  /** Anonymous visitor ID, already SHA-256 hashed by the browser (same value as the pixel's external_id) */
+  externalId?: string;
 }
 
 /**
@@ -238,6 +250,7 @@ export async function sendMetaCapiEvent(params: SendCapiEarlyEventParams): Promi
 
     const rawUserData: Record<string, any> = {
       country: [sha256('iq')],
+      external_id: externalIdField(params.externalId),
       client_ip_address: cleanIp || undefined,
       client_user_agent: params.userAgent?.trim() || undefined,
       fbc: (params.fbc && typeof params.fbc === 'string' && params.fbc.trim().startsWith('fb.'))

@@ -1,5 +1,5 @@
 import { RolemallProduct, RolemallCategory } from './types';
-import { getOptimizedImageUrl } from './lib/image';
+import { getGalleryImage, GALLERY_IMAGE_SIZES } from './lib/image';
 
 export interface GenerateSeoOptions {
   view: 'home' | 'product' | '404' | 'unavailable' | 'success';
@@ -121,8 +121,11 @@ export function generateHeadTags(options: GenerateSeoOptions): string {
 
   // Preload main product image for instant LCP on product pages
   if (options.view === 'product' && options.product?.image) {
-    const proxiedImageUrl = getOptimizedImageUrl(options.product.image, { width: 800, quality: 72, fit: 'contain' });
-    tags.push(`<link rel="preload" as="image" href="${escapeHtml(proxiedImageUrl)}" fetchpriority="high" />`);
+    // Same srcset/sizes as the gallery: the browser picks the same file for the preload and the <img>
+    const gallery = getGalleryImage(options.product.image);
+    tags.push(
+      `<link rel="preload" as="image" href="${escapeHtml(gallery.src)}" imagesrcset="${escapeHtml(gallery.srcSet)}" imagesizes="${escapeHtml(GALLERY_IMAGE_SIZES)}" fetchpriority="high" />`
+    );
   }
 
   return tags.join('\n    ');

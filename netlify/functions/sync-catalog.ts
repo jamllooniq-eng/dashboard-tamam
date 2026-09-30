@@ -1,6 +1,7 @@
 import type { Handler } from '@netlify/functions';
 import { syncFullCatalog } from '../../server/rolemall.server';
 import { isSupabaseConfigured } from '../../server/supabase.server';
+import { refreshPagesAfterSync } from '../../server/page-refresh.server';
 
 /**
  * Scheduled every hour (see netlify.toml).
@@ -19,6 +20,13 @@ export const handler: Handler = async () => {
 
   if (result.ok) {
     console.log(`[sync] Saved ${result.products} products from ${result.pages} page(s) in ${seconds}s`);
+    // Refresh only the cached pages whose product changed (price, availability, title, image)
+    const refresh = await refreshPagesAfterSync(result, { maxWarm: 10, deadlineMs: 15000 });
+    if (refresh.changed > 0 || refresh.purge) {
+      console.log(
+        `[sync] ${refresh.changed} product(s) changed | cache purge: ${refresh.purge ? (refresh.purge.ok ? 'ok' : `FAILED (${refresh.purge.error})`) : 'not needed'} | pages re-rendered: ${refresh.warmed}`
+      );
+    }
   } else {
     console.warn(`[sync] Skipped saving (previous copy kept): ${result.reason} (${seconds}s)`);
   }

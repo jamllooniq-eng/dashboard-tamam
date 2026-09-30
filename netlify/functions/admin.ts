@@ -1,5 +1,4 @@
 import type { Handler } from '@netlify/functions';
-import { purgeCache } from '@netlify/functions';
 import crypto from 'crypto';
 import {
   isSupabaseConfigured,
@@ -12,6 +11,21 @@ import {
   MANUAL_ID_PREFIX,
 } from '../../server/supabase.server';
 import { syncFullCatalog, getCatalogSyncInfo } from '../../server/rolemall.server';
+import { markManualProductsChanged } from '../../server/supabase.server';
+import { refreshPagesAfterSync, refreshManualProduct } from '../../server/page-refresh.server';
+import { getLastPurgeStatus, isPurgeConfigured, PurgeStatus } from '../../server/cache.server';
+
+/** What the dashboard shows about refreshing the website's cached pages. */
+function cacheReport(purge: PurgeStatus | null) {
+  if (!purge) return { refreshed: true, needed: false };
+  return { refreshed: purge.ok, needed: true, error: purge.ok ? undefined : purge.error };
+}
+
+/** After any manual product change: product cards + that product's page are refreshed on the site. */
+async function afterManualChange(id: number, image: string | undefined, visible: boolean) {
+  await markManualProductsChanged();
+  return cacheReport(await refreshManualProduct(id, image, visible));
+}
 
 // One manual sync at a time per function instance (the button is also disabled while it runs)
 let manualSyncRunning = false;
@@ -183,7 +197,8 @@ export const handler: Handler = async (event) => {
         const parsed = parseProductInput(body);
         if (parsed.error) return json(400, { error: parsed.error });
         const product = await adminCreateManualProduct(parsed.value as ManualProductInput);
-        return json(200, { product });
+        const cache = await afterManualChange(product.id, product.images[0], product.is_active);
+        return json(200, { product, cache });
       }
 
       case 'update': {
@@ -193,7 +208,8 @@ export const handler: Handler = async (event) => {
         const parsed = parseProductInput(body, true);
         if (parsed.error) return json(400, { error: parsed.error });
         const product = await adminUpdateManualProduct(id, parsed.value || {});
-        return json(200, { product });
+        const cache = await afterManualChange(product.id, product.images[0], product.is_active);
+        return json(200, { product, cache });
       }
 
       case 'delete': {
@@ -201,7 +217,8 @@ export const handler: Handler = async (event) => {
         const id = parseId(body.id);
         if (!id) return json(400, { error: 'رقم المنتج غير صالح.' });
         await adminDeleteManualProduct(id);
-        return json(200, { success: true });
+        const cache = await afterManualChange(id, undefined, false);
+        return json(200, { success: true, cache });
       }
 
       case 'upload': {
@@ -217,8 +234,8 @@ export const handler: Handler = async (event) => {
       }
 
       case 'sync-status': {
-        const info = await getCatalogSyncInfo();
-        return json(200, info);
+        const [info, lastPurge] = await Promise.all([getCatalogSyncInfo(), getLastPurgeStatus()]);
+        return json(200, { ...info, purgeConfigured: isPurgeConfigured(), lastPurge });
       }
 
       case 'sync': {
@@ -230,22 +247,18 @@ export const handler: Handler = async (event) => {
         try {
           const started = Date.now();
           const result = await syncFullCatalog();
+          // Only the products that really changed get their cached pages purged and re-rendered
+          const refresh = await refreshPagesAfterSync(result, { maxWarm: 20, deadlineMs: 30000 });
           const info = await getCatalogSyncInfo();
-          // Pages already cached by Netlify's CDN still show the old prices: clear them (best effort)
-          let cdnPurged = false;
-          if (result.ok) {
-            try {
-              // Give every running server copy time to notice the sync (they check every 5s)
-              // before clearing the CDN, so none of them re-caches an old price
-              await new Promise((resolve) => setTimeout(resolve, 6000));
-              await purgeCache();
-              cdnPurged = true;
-            } catch (err: any) {
-              console.warn('[admin] CDN purge skipped:', err?.message || err);
-            }
-          }
-          console.log(`[admin] manual sync: ${JSON.stringify(result)} cdnPurged=${cdnPurged} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
-          return json(200, { result, ...info, cdnPurged, seconds: Math.round((Date.now() - started) / 1000) });
+          const seconds = Math.round((Date.now() - started) / 1000);
+          console.log(`[admin] manual sync: ${JSON.stringify({ ...result, changed: result.changed?.length })} refresh=${JSON.stringify({ changed: refresh.changed, purgeOk: refresh.purge?.ok, warmed: refresh.warmed })} in ${seconds}s`);
+          return json(200, {
+            result: { ok: result.ok, products: result.products, reason: result.reason },
+            ...info,
+            changed: refresh.changed,
+            cache: cacheReport(refresh.purge),
+            seconds,
+          });
         } finally {
           manualSyncRunning = false;
         }

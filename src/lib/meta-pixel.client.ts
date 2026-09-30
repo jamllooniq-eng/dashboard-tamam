@@ -22,6 +22,38 @@ let currentIqdToUsdRate = 1400;
 let initPromise: Promise<void> | null = null;
 let configLoaded = false;
 
+// ---- External ID: one random, anonymous ID per visitor, kept on the phone ----
+// Sent hashed (SHA-256) by BOTH the browser pixel and the server, so Meta can link a visitor's
+// ViewContent -> InitiateCheckout -> Purchase and match them better. Contains no personal data.
+const VISITOR_ID_KEY = 'tamam_vid';
+let externalIdHash: string | null = null;
+
+async function computeExternalId(): Promise<string | null> {
+  if (externalIdHash) return externalIdHash;
+  try {
+    let vid = localStorage.getItem(VISITOR_ID_KEY);
+    if (!vid) {
+      vid =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(VISITOR_ID_KEY, vid);
+    }
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(vid));
+    externalIdHash = Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return externalIdHash;
+  } catch {
+    return null; // storage or crypto unavailable: simply no external_id
+  }
+}
+
+/** Hashed visitor ID (available once the pixel config has loaded). */
+export function getExternalId(): string | undefined {
+  return externalIdHash || undefined;
+}
+
 function whenTrackingReady(fn: () => void): void {
   if (typeof window === 'undefined') return;
   if (configLoaded || !initPromise) {
@@ -123,6 +155,7 @@ async function runPixelInit(): Promise<void> {
   if (isInitialized) return;
 
   captureTikTokClickId();
+  await computeExternalId();
 
   try {
     // Capture fbclid immediately on initial landing
@@ -179,7 +212,11 @@ async function runPixelInit(): Promise<void> {
     /* eslint-enable */
 
     if (window.fbq) {
-      window.fbq('init', pixelId);
+      if (externalIdHash) {
+        window.fbq('init', pixelId, { external_id: externalIdHash });
+      } else {
+        window.fbq('init', pixelId);
+      }
       window.fbq('track', 'PageView');
 
       // Debug only — does not send another event
@@ -235,6 +272,18 @@ function sendServerCapiEarlyEvent(
   count: number
 ): void {
   if (typeof window === 'undefined') return;
+  // Wait for the tracking config so the external_id is ready (a fraction of a second on first load)
+  whenTrackingReady(() => sendServerCapiEarlyEventNow(eventName, eventId, productId, productName, priceIqd, count));
+}
+
+function sendServerCapiEarlyEventNow(
+  eventName: 'ViewContent' | 'InitiateCheckout',
+  eventId: string,
+  productId: string | number,
+  productName: string,
+  priceIqd: number,
+  count: number
+): void {
   try {
     const { fbp, fbc } = getMetaCookies();
     const { ttp, ttclid } = getTikTokIds();
@@ -253,6 +302,7 @@ function sendServerCapiEarlyEvent(
         fbp,
         ttp,
         ttclid,
+        externalId: getExternalId(),
       }),
       keepalive: true,
     }).catch(() => {
@@ -398,6 +448,10 @@ export function trackPurchase(order: {
           }
         }
 
+        if (externalIdHash) {
+          advancedMatching.external_id = externalIdHash;
+        }
+
         if (Object.keys(advancedMatching).length > 0) {
           window.fbq('init', currentPixelId, advancedMatching);
         }
@@ -410,6 +464,8 @@ export function trackPurchase(order: {
         value: usdValue,
         currency: 'USD',
         num_items: order.count,
+        // Same order ID the server sends: lets Meta identify each order (was missing on browser copies)
+        order_id: order.orderId,
       };
 
       window.fbq(

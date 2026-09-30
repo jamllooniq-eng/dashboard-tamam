@@ -53,6 +53,7 @@ export const handler: Handler = async (event) => {
         fbc,
         fbp,
         sourceUrl,
+        externalId: typeof body.externalId === 'string' ? body.externalId : undefined,
       }),
       // No-op unless TIKTOK_PIXEL_ID and TIKTOK_ACCESS_TOKEN are set
       sendTikTokEvent({

@@ -6,6 +6,9 @@
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="preload" href="/fonts/cairo/cairo-700.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/cairo/cairo-400.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Open the connection to Meta early so the Pixel script arrives sooner (doesn't delay the page) -->
+    <link rel="preconnect" href="https://connect.facebook.net" />
+    <link rel="dns-prefetch" href="https://connect.facebook.net" />
     <!--app-head-->
   </head>
   <body class="bg-white text-black font-['Cairo',sans-serif] antialiased selection:bg-[#22A39E]/20 selection:text-[#22A39E]">

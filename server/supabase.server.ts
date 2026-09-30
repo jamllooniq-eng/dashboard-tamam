@@ -244,10 +244,29 @@ export function parseManualId(id: string | number): number | null {
 }
 
 /** Active manual products for the storefront (cached ~60s per function instance). */
+// The dashboard bumps this marker on every manual-product change; server copies check it every
+// few seconds (a few bytes), so an edit shows up on product cards within seconds, not 5 minutes.
+const MANUAL_VERSION_KEY = 'manual_products_version';
+const MANUAL_VERSION_CHECK_MS = 5 * 1000;
+let lastManualVersionCheck = 0;
+
+export async function markManualProductsChanged(): Promise<void> {
+  manualCache = null;
+  await kvSet(MANUAL_VERSION_KEY, { at: Date.now() });
+}
+
+async function manualCacheStillCurrent(now: number): Promise<boolean> {
+  if (!manualCache) return false;
+  if (now - lastManualVersionCheck < MANUAL_VERSION_CHECK_MS) return true;
+  lastManualVersionCheck = now;
+  const changedAt = await kvGetUpdatedAt(MANUAL_VERSION_KEY);
+  return !(changedAt && changedAt > manualCache.timestamp);
+}
+
 export async function listActiveManualProducts(): Promise<ManualProductRow[]> {
   if (!isSupabaseConfigured()) return [];
   const now = Date.now();
-  if (manualCache && now - manualCache.timestamp < MANUAL_CACHE_TTL_MS) {
+  if (manualCache && now - manualCache.timestamp < MANUAL_CACHE_TTL_MS && (await manualCacheStillCurrent(now))) {
     return manualCache.rows;
   }
   try {

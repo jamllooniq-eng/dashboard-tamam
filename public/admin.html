@@ -379,9 +379,32 @@
     return `آخر مزامنة ناجحة: ${when} · ${fmt(info.products)} منتج محفوظ`;
   }
 
+  // Website page refresh (CDN cache purge) — explained in plain words
+  const CACHE_ERRORS = {
+    'missing-token': 'مفتاح NETLIFY_PURGE_API_TOKEN غير موجود بمتغيرات Netlify.',
+    'token-rejected': 'Netlify رفض المفتاح NETLIFY_PURGE_API_TOKEN، غالباً انتهت مدته. سوِّ مفتاح جديد وبدّله.',
+  };
+  function cacheText(cache) {
+    if (!cache || !cache.needed) return '';
+    if (cache.refreshed) return ' صفحات الموقع تحدثت.';
+    const why = CACHE_ERRORS[cache.error] || 'تعذر تحديث صفحات الموقع فوراً.';
+    return ` ⚠️ ${why} الصفحات تتحدث تلقائياً خلال ساعة، وسعر الطلب صحيح دائماً.`;
+  }
+  function showPurgeWarning(status) {
+    if (!status) return;
+    if (!status.purgeConfigured) {
+      show($('syncMsg'), '⚠️ ' + CACHE_ERRORS['missing-token'] + ' بدونه، تغيير الأسعار يتأخر لحد ساعة بصفحات الموقع.', 'err');
+    } else if (status.lastPurge && status.lastPurge.ok === false) {
+      const when = new Date(status.lastPurge.at).toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+      show($('syncMsg'), `⚠️ آخر تحديث لصفحات الموقع فشل (${when}): ` + (CACHE_ERRORS[status.lastPurge.error] || status.lastPurge.error), 'err');
+    }
+  }
+
   async function loadSyncInfo() {
     try {
-      $('syncInfo').textContent = syncInfoText(await api('sync-status'));
+      const status = await api('sync-status');
+      $('syncInfo').textContent = syncInfoText(status);
+      showPurgeWarning(status);
     } catch {
       $('syncInfo').textContent = 'تعذر قراءة حالة المزامنة.';
     }
@@ -409,10 +432,11 @@
     try {
       const data = await api('sync', {});
       if (data.result && data.result.ok) {
-        show($('syncMsg'), `✅ تمت المزامنة: ${fmt(data.result.products)} منتج انحفظ بأحدث الأسعار (${data.seconds} ثانية). ` +
-          (data.cdnPurged
-            ? 'الأسعار الجديدة ظاهرة بالموقع الآن.'
-            : 'الأسعار الجديدة تظهر بالموقع خلال 5 دقائق تقريباً.'), 'ok');
+        const changedText = data.changed > 0
+          ? `${fmt(data.changed)} منتج تغيّر.`
+          : 'ما تغيّر أي سعر.';
+        const failed = data.cache && data.cache.needed && !data.cache.refreshed;
+        show($('syncMsg'), `${failed ? '⚠️' : '✅'} تمت المزامنة: ${fmt(data.result.products)} منتج انحفظ (${data.seconds} ثانية). ${changedText}${cacheText(data.cache)}`, failed ? 'err' : 'ok');
       } else {
         show($('syncMsg'), `⚠️ ما تمت المزامنة: ${syncReasonText(data.result && data.result.reason)} النسخة المحفوظة القديمة ما تغيّرت، والموقع يكمل يستخدمها.`, 'err');
       }
@@ -497,14 +521,16 @@
 
     btn.disabled = true;
     try {
+      let res = null;
       if (btn.dataset.act === 'toggle') {
-        await api('update', { id, is_active: !product.is_active });
+        res = await api('update', { id, is_active: !product.is_active });
       } else if (btn.dataset.act === 'delete') {
         if (!confirm(`حذف "${product.title}" نهائياً؟`)) { btn.disabled = false; return; }
-        await api('delete', { id });
+        res = await api('delete', { id });
         if (state.editingId === id) resetForm();
       }
       await loadList();
+      if (res && res.cache && res.cache.needed && !res.cache.refreshed) show($('listMsg'), cacheText(res.cache).trim());
     } catch (err) {
       show($('listMsg'), err.message);
       btn.disabled = false;
@@ -659,12 +685,13 @@
     btn.disabled = true;
     try {
       const wasEditing = Boolean(state.editingId);
-      if (wasEditing) await api('update', { id: state.editingId, ...payload });
-      else await api('create', payload);
+      btn.textContent = 'جاري الحفظ وتحديث صفحة المنتج...';
+      const res = wasEditing
+        ? await api('update', { id: state.editingId, ...payload })
+        : await api('create', payload);
       resetForm();
-      show($('formMsg'), wasEditing
-        ? 'تم حفظ التعديلات. يتحدث بالمتجر خلال 5 دقائق تقريباً.'
-        : 'تمت إضافة المنتج. يظهر بالمتجر خلال 5 دقائق تقريباً.', 'ok');
+      const failed = res.cache && res.cache.needed && !res.cache.refreshed;
+      show($('formMsg'), (wasEditing ? 'تم حفظ التعديلات.' : 'تمت إضافة المنتج.') + (failed ? cacheText(res.cache) : ' ظاهر بالمتجر الآن.'), failed ? 'err' : 'ok');
       await loadList();
     } catch (err) {
       show($('formMsg'), err.message);

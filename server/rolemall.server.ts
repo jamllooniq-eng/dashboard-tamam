@@ -7,6 +7,7 @@
 
 import { RolemallProduct, RolemallCategory, ProductsResponse } from '../src/types';
 import fs from 'fs';
+import crypto from 'crypto';
 import os from 'os';
 import path from 'path';
 import {
@@ -157,9 +158,10 @@ const CATALOG_MEMORY_TTL_MS = 10 * 60 * 1000;
 const CATALOG_IDS_KEY = 'catalog_ids';
 let catalogIds: { ids: Set<string>; loadedAt: number; syncedAt: number } | null = null;
 
-// Re-read at most once a minute: this is how every running server copy learns that a sync
-// (hourly or the dashboard button) just finished, and that what it saved before is outdated.
-const CATALOG_IDS_TTL_MS = 60 * 1000;
+// The id list itself is re-read every 10 minutes. A NEW sync is noticed much faster than that:
+// latestSyncAt() checks only the sync time (a few bytes) every 5 seconds and forces a reload.
+// (Re-reading the whole list every minute was the largest Supabase download.)
+const CATALOG_IDS_TTL_MS = 10 * 60 * 1000;
 
 async function loadCatalogIds(): Promise<Set<string> | null> {
   const now = Date.now();
@@ -1188,6 +1190,17 @@ export interface CatalogSyncResult {
   products: number;
   pages: number;
   reason?: string;
+  /** Products whose price / old price / availability / title / main image changed, or that were removed */
+  changed?: { id: string; image: string }[];
+  /** True when product cards (home / categories) need refreshing: something changed, was added or removed */
+  listingChanged?: boolean;
+}
+
+// Tiny fingerprint per product (a few KB for the whole catalog) to detect exactly what changed between syncs
+const CATALOG_SIGNATURES_KEY = 'catalog_signatures';
+function productSignature(p: RolemallProduct): string {
+  const raw = `${p.price}|${p.old_price ?? ''}|${p.available === false ? 0 : 1}|${p.title}|${p.image || ''}`;
+  return crypto.createHash('sha1').update(raw).digest('hex').slice(0, 12);
 }
 
 /**
@@ -1266,10 +1279,29 @@ export async function syncFullCatalog(): Promise<CatalogSyncResult> {
 
   const now = Date.now();
   const newIds = products.map((p) => String(p.id));
+
+  // What changed since the last sync (used to refresh only the affected cached pages)
+  const previousSignatures = await kvGet<Record<string, string>>(CATALOG_SIGNATURES_KEY, { timeoutMs: 5000, tripBreaker: false });
+  const signatures: Record<string, string> = {};
+  for (const p of products) signatures[String(p.id)] = productSignature(p);
+  let changed: { id: string; image: string }[] = [];
+  let listingChanged = false;
+  if (previousSignatures && previousSignatures.data && typeof previousSignatures.data === 'object') {
+    const prev = previousSignatures.data;
+    changed = products
+      .filter((p) => prev[String(p.id)] !== undefined && prev[String(p.id)] !== signatures[String(p.id)])
+      .map((p) => ({ id: String(p.id), image: p.image || '' }));
+    const removed = Object.keys(prev).filter((id) => signatures[id] === undefined);
+    changed.push(...removed.map((id) => ({ id, image: '' })));
+    const added = newIds.some((id) => prev[id] === undefined);
+    listingChanged = changed.length > 0 || added;
+  }
+
   const catalogOk = await kvSetMany(
     [
       { key: CATALOG_KEY, data: products },
       { key: CATALOG_IDS_KEY, data: newIds },
+      { key: CATALOG_SIGNATURES_KEY, data: signatures },
     ],
     now
   );
@@ -1296,7 +1328,7 @@ export async function syncFullCatalog(): Promise<CatalogSyncResult> {
   }
 
   catalogSnapshot = { products, loadedAt: now };
-  return { ok: true, products: products.length, pages: totalPages };
+  return { ok: true, products: products.length, pages: totalPages, changed, listingChanged };
 }
 
 

@@ -155,6 +155,7 @@ export const handler: Handler = async (event) => {
       fbp: body.fbp,
       ttp: typeof body.ttp === 'string' ? body.ttp : undefined,
       ttclid: typeof body.ttclid === 'string' ? body.ttclid : undefined,
+      externalId: typeof body.externalId === 'string' ? body.externalId : undefined,
       clientIp,
       userAgent,
     };
@@ -225,6 +226,7 @@ export const handler: Handler = async (event) => {
           fbc: body.fbc,
           fbp: body.fbp,
           sourceUrl: productPageUrl,
+          externalId: typeof body.externalId === 'string' ? body.externalId : undefined,
         }).catch(() => false),
         // No-op unless TikTok is configured
         sendTikTokEvent({

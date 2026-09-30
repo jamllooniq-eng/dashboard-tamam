@@ -7,7 +7,7 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
-  included_files = ["dist/client/index.html"]
+  included_files = ["dist/client/index.html", "dist/client/assets/*.css"]
 [functions."sync-catalog"]
   schedule = "@hourly"
 [images]

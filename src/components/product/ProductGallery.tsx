@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import useEmblaCarousel from 'embla-carousel-react';
 import { ShoppingBag } from 'lucide-react';
-import { getOptimizedImageUrl } from '../../lib/image';
+import { getGalleryImage, GALLERY_IMAGE_SIZES } from '../../lib/image';
 
 interface ProductGalleryProps {
   images?: string[];
@@ -28,18 +28,41 @@ export const ProductGallery: React.FC<ProductGalleryProps> = ({
 
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // All images use the same reduced quality (72 instead of 80) — a real,
-  // measurable reduction in file size with no visible difference on a phone
-  // screen. Every image loads normally; no selective eager/lazy logic, which
-  // is what caused the smoothness regressions in earlier, more complex attempts.
-  const proxiedUrls = allImages.map((img) =>
-    getOptimizedImageUrl(img, { width: 800, quality: 72, fit: 'contain' })
-  );
+  // Each image is offered in several widths (srcSet): the phone downloads the smallest one that is
+  // still sharp for its screen. Same definition as the <head> preload, so the main image downloads once.
+  const galleryImages = allImages.map((img) => getGalleryImage(img));
+
+  // The main (first) image gets the whole connection: the other photos have NO src until it has
+  // finished loading (also on the server-rendered HTML), then they load in the background so they
+  // are ready when the customer swipes.
+  const [restReady, setRestReady] = useState(false);
+  const mainImgRef = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const img = mainImgRef.current;
+    if (!img || img.complete) {
+      setRestReady(true);
+      return;
+    }
+    const done = () => setRestReady(true);
+    img.addEventListener('load', done);
+    img.addEventListener('error', done);
+    // Safety net: never keep the other photos waiting forever on a very slow connection
+    const timer = setTimeout(done, 4000);
+    return () => {
+      img.removeEventListener('load', done);
+      img.removeEventListener('error', done);
+      clearTimeout(timer);
+    };
+  }, []);
 
   // Keep React state in sync with Embla's own selected slide
   useEffect(() => {
     if (!emblaApi) return;
-    const onSelect = () => setSelectedIndex(emblaApi.selectedScrollSnap());
+    const onSelect = () => {
+      const idx = emblaApi.selectedScrollSnap();
+      setSelectedIndex(idx);
+      if (idx > 0) setRestReady(true); // customer swiped early: load the photos now
+    };
     emblaApi.on('select', onSelect);
     onSelect();
     return () => {
@@ -64,7 +87,12 @@ export const ProductGallery: React.FC<ProductGalleryProps> = ({
               {allImages.map((img, idx) => (
                 <div key={img + idx} className="relative h-full shrink-0 grow-0 basis-full">
                   <img
-                    src={proxiedUrls[idx]}
+                    ref={idx === 0 ? mainImgRef : undefined}
+                    src={idx === 0 || restReady ? galleryImages[idx].src : undefined}
+                    srcSet={idx === 0 || restReady ? galleryImages[idx].srcSet : undefined}
+                    sizes={GALLERY_IMAGE_SIZES}
+                    width={800}
+                    height={800}
                     alt={`${title} - صورة ${idx + 1}`}
                     fetchPriority={idx === 0 ? 'high' : 'low'}
                     loading={idx === 0 ? 'eager' : 'lazy'}
@@ -73,8 +101,11 @@ export const ProductGallery: React.FC<ProductGalleryProps> = ({
                     draggable={false}
                     className="w-full h-full object-cover object-center"
                     onError={(e) => {
+                      // Image CDN failed: fall back to the original image (srcset must go too,
+                      // otherwise the browser keeps choosing from it)
                       const target = e.currentTarget;
                       if (img && target.src !== img) {
+                        target.removeAttribute('srcset');
                         target.src = img;
                       }
                     }}

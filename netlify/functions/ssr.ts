@@ -2,6 +2,26 @@ import type { Handler } from '@netlify/functions';
 import fs from 'fs';
 import path from 'path';
 import { render, MEANINGFUL_QUERY_PARAMS } from '../../src/entry-server';
+import { parseRoute } from '../../src/routing';
+import { cachedHeaders, productTag, TAG_LISTING, TAG_PAGES } from '../../server/cache.server';
+
+/**
+ * Put the stylesheet inside the HTML (<style>) instead of a separate <link> request.
+ * The page can paint as soon as the HTML arrives, with no extra round trip (Lighthouse:
+ * "Render-blocking requests"). If the CSS file can't be read, the original <link> is kept.
+ */
+function inlineStylesheets(html: string, templatePath: string): string {
+  const clientDir = path.dirname(templatePath);
+  return html.replace(/<link rel="stylesheet"[^>]*href="(\/assets\/[^"]+\.css)"[^>]*>/g, (tag, href) => {
+    try {
+      const css = fs.readFileSync(path.join(clientDir, href), 'utf-8');
+      if (!css || css.includes('</style')) return tag;
+      return `<style>${css}</style>`;
+    } catch {
+      return tag;
+    }
+  });
+}
 
 let cachedTemplate: string | null = null;
 
@@ -18,7 +38,7 @@ function getTemplate(): string {
 
   for (const p of possiblePaths) {
     if (fs.existsSync(p)) {
-      cachedTemplate = fs.readFileSync(p, 'utf-8');
+      cachedTemplate = inlineStylesheets(fs.readFileSync(p, 'utf-8'), p);
       return cachedTemplate;
     }
   }
@@ -53,10 +73,16 @@ export const handler: Handler = async (event) => {
     const vary = `query=${MEANINGFUL_QUERY_PARAMS.join('|')}`;
 
     if (finalStatus === 200) {
-      // Prices must be current on the FIRST visit: Netlify keeps a page at most 60s and never serves
-      // an expired copy (no stale-while-revalidate); browsers always re-check with Netlify.
-      headers['Cache-Control'] = 'public, max-age=0, must-revalidate';
-      headers['Netlify-CDN-Cache-Control'] = 'public, max-age=60';
+      // Ready page from Netlify's durable CDN cache (instant open). Tagged so a price change purges
+      // exactly this product's page (see server/cache.server.ts); pages are re-rendered right after.
+      const route = parseRoute(event.path, rawQuery ? `?${rawQuery}` : '');
+      const tags =
+        route.view === 'product' && route.productId
+          ? [productTag(route.productId), TAG_PAGES]
+          : route.view === 'home'
+            ? [TAG_LISTING, TAG_PAGES]
+            : [TAG_PAGES];
+      Object.assign(headers, cachedHeaders(tags));
       headers['Netlify-Vary'] = vary;
     } else if (finalStatus === 404) {
       // Not Found is stable: keep it at the CDN for a few minutes so repeated bot hits never reach the function
