@@ -411,7 +411,7 @@
       if (data.result && data.result.ok) {
         show($('syncMsg'), `✅ تمت المزامنة: ${fmt(data.result.products)} منتج انحفظ بأحدث الأسعار (${data.seconds} ثانية). ` +
           (data.cdnPurged
-            ? 'الأسعار الجديدة تظهر بالموقع خلال دقيقة.'
+            ? 'الأسعار الجديدة ظاهرة بالموقع الآن.'
             : 'الأسعار الجديدة تظهر بالموقع خلال 5 دقائق تقريباً.'), 'ok');
       } else {
         show($('syncMsg'), `⚠️ ما تمت المزامنة: ${syncReasonText(data.result && data.result.reason)} النسخة المحفوظة القديمة ما تغيّرت، والموقع يكمل يستخدمها.`, 'err');

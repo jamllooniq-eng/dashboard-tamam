@@ -235,6 +235,9 @@ export const handler: Handler = async (event) => {
           let cdnPurged = false;
           if (result.ok) {
             try {
+              // Give every running server copy time to notice the sync (they check every 5s)
+              // before clearing the CDN, so none of them re-caches an old price
+              await new Promise((resolve) => setTimeout(resolve, 6000));
               await purgeCache();
               cdnPurged = true;
             } catch (err: any) {

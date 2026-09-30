@@ -14,6 +14,7 @@ import {
   kvSet,
   kvSetMany,
   kvDeleteMany,
+  kvGetUpdatedAt,
   listActiveManualProducts,
   getManualProduct,
   manualRowToProduct,
@@ -175,8 +176,21 @@ async function loadCatalogIds(): Promise<Set<string> | null> {
   return null;
 }
 
+// Every few seconds, check ONLY the time of the last sync (a few bytes). When it changed,
+// re-read the id list right away, so a finished sync takes effect everywhere within seconds.
+const SYNC_CHECK_INTERVAL_MS = 5 * 1000;
+let lastSyncCheck = 0;
+
 /** Time of the latest successful full sync (0 if none yet). */
 async function latestSyncAt(): Promise<number> {
+  const now = Date.now();
+  if (catalogIds && now - lastSyncCheck >= SYNC_CHECK_INTERVAL_MS) {
+    lastSyncCheck = now;
+    const remoteAt = await kvGetUpdatedAt(CATALOG_IDS_KEY);
+    if (remoteAt && remoteAt > catalogIds.syncedAt) {
+      catalogIds.loadedAt = 0; // force a fresh id list below
+    }
+  }
   await loadCatalogIds();
   return catalogIds?.syncedAt || 0;
 }

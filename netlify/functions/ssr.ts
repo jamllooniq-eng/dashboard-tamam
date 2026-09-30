@@ -53,8 +53,10 @@ export const handler: Handler = async (event) => {
     const vary = `query=${MEANINGFUL_QUERY_PARAMS.join('|')}`;
 
     if (finalStatus === 200) {
-      headers['Cache-Control'] = 'public, max-age=60, s-maxage=300, stale-while-revalidate=86400';
-      headers['Netlify-CDN-Cache-Control'] = 'public, max-age=300, stale-while-revalidate=86400';
+      // Prices must be current on the FIRST visit: Netlify keeps a page at most 60s and never serves
+      // an expired copy (no stale-while-revalidate); browsers always re-check with Netlify.
+      headers['Cache-Control'] = 'public, max-age=0, must-revalidate';
+      headers['Netlify-CDN-Cache-Control'] = 'public, max-age=60';
       headers['Netlify-Vary'] = vary;
     } else if (finalStatus === 404) {
       // Not Found is stable: keep it at the CDN for a few minutes so repeated bot hits never reach the function

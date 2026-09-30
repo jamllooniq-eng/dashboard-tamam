@@ -20,8 +20,9 @@ export const handler: Handler = async (event) => {
         statusCode: 200,
         headers: {
           'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=120, s-maxage=600, stale-while-revalidate=86400',
-          'Netlify-CDN-Cache-Control': 'public, max-age=600, stale-while-revalidate=86400',
+          // Same rule as product pages: current price on the first request, never an expired copy
+          'Cache-Control': 'public, max-age=0, must-revalidate',
+          'Netlify-CDN-Cache-Control': 'public, max-age=60',
         },
         body: JSON.stringify(result.product),
       };

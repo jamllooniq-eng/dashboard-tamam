@@ -16,9 +16,9 @@ export const handler: Handler = async (event) => {
       statusCode: 200,
       headers: {
         'Content-Type': 'application/json',
-        'Cache-Control': isEmptyMainList
-          ? 'no-store'
-          : 'public, max-age=120, s-maxage=600, stale-while-revalidate=1800',
+        'Cache-Control': isEmptyMainList ? 'no-store' : 'public, max-age=0, must-revalidate',
+        // Product cards show prices: at most 60s at Netlify, never an expired copy
+        ...(isEmptyMainList ? {} : { 'Netlify-CDN-Cache-Control': 'public, max-age=60' }),
       },
       body: JSON.stringify(result),
     };

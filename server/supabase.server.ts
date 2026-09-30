@@ -123,6 +123,23 @@ export async function kvGet<T>(
   }
 }
 
+/** Only a row's last-update time (a few bytes), used to notice a finished sync quickly. */
+export async function kvGetUpdatedAt(key: string): Promise<number | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const res = await sbFetch(
+      `/rest/v1/cache_entries?key=eq.${encodeURIComponent(key)}&select=updated_at&limit=1`,
+      {},
+      STOREFRONT_TIMEOUT_MS
+    );
+    if (!res.ok) return null;
+    const rows = await res.json();
+    return Array.isArray(rows) && rows[0] ? new Date(rows[0].updated_at).getTime() : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function kvSet<T>(key: string, data: T, timestamp = Date.now()): Promise<void> {
   if (!isSupabaseConfigured()) return;
   try {
