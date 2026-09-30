@@ -156,9 +156,13 @@ const CATALOG_MEMORY_TTL_MS = 10 * 60 * 1000;
 const CATALOG_IDS_KEY = 'catalog_ids';
 let catalogIds: { ids: Set<string>; loadedAt: number; syncedAt: number } | null = null;
 
+// Re-read at most once a minute: this is how every running server copy learns that a sync
+// (hourly or the dashboard button) just finished, and that what it saved before is outdated.
+const CATALOG_IDS_TTL_MS = 60 * 1000;
+
 async function loadCatalogIds(): Promise<Set<string> | null> {
   const now = Date.now();
-  if (catalogIds && now - catalogIds.loadedAt < CATALOG_MEMORY_TTL_MS) return catalogIds.ids;
+  if (catalogIds && now - catalogIds.loadedAt < CATALOG_IDS_TTL_MS) return catalogIds.ids;
   const remote = await kvGet<string[]>(CATALOG_IDS_KEY);
   if (remote && Array.isArray(remote.data)) {
     catalogIds = { ids: new Set(remote.data.map(String)), loadedAt: now, syncedAt: remote.timestamp };
@@ -169,6 +173,12 @@ async function loadCatalogIds(): Promise<Set<string> | null> {
     return catalogIds.ids;
   }
   return null;
+}
+
+/** Time of the latest successful full sync (0 if none yet). */
+async function latestSyncAt(): Promise<number> {
+  await loadCatalogIds();
+  return catalogIds?.syncedAt || 0;
 }
 
 /** Full product snapshot: only read when the supplier is actually failing. */
@@ -587,6 +597,15 @@ async function getRolemallProducts(options: {
     }
   }
 
+  // A list saved before the latest sync shows old prices: fetch it again now
+  // (if Rolemall fails, fetchProductsDirect falls back to this same saved list)
+  if (cached && !query) {
+    const syncedAt = await latestSyncAt();
+    if (syncedAt && cached.timestamp < syncedAt) {
+      return fetchProductsDirect(cacheKey, page, limit, category, query);
+    }
+  }
+
   // 1. Fresh Cache Hit
   if (cached && (now - cached.timestamp < FRESH_TTL_MS)) {
     return cached.data;
@@ -991,6 +1010,23 @@ async function getRolemallProductDetails(productId: string | number): Promise<Pr
     if (diskEntry) {
       cached = diskEntry;
       memoryCache.productDetails.set(pId, diskEntry);
+    }
+  }
+
+  // A copy saved before the latest sync is outdated (price may have changed): use the synced row
+  // from Supabase instead. If the sync no longer has this product, drop the old copy entirely.
+  if (cached) {
+    const syncedAt = await latestSyncAt();
+    if (syncedAt && cached.timestamp < syncedAt) {
+      const synced = await kvGet<RolemallProduct>(`product_${pId}`);
+      if (synced && synced.timestamp > cached.timestamp) {
+        cached = synced;
+        memoryCache.productDetails.set(pId, synced);
+        setDiskCache(`product_${pId}`, synced);
+      } else if (catalogIds && !catalogIds.ids.has(pId)) {
+        memoryCache.productDetails.delete(pId);
+        cached = undefined;
+      }
     }
   }
 

@@ -1,4 +1,5 @@
 import type { Handler } from '@netlify/functions';
+import { purgeCache } from '@netlify/functions';
 import crypto from 'crypto';
 import {
   isSupabaseConfigured,
@@ -230,8 +231,18 @@ export const handler: Handler = async (event) => {
           const started = Date.now();
           const result = await syncFullCatalog();
           const info = await getCatalogSyncInfo();
-          console.log(`[admin] manual sync: ${JSON.stringify(result)} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
-          return json(200, { result, ...info, seconds: Math.round((Date.now() - started) / 1000) });
+          // Pages already cached by Netlify's CDN still show the old prices: clear them (best effort)
+          let cdnPurged = false;
+          if (result.ok) {
+            try {
+              await purgeCache();
+              cdnPurged = true;
+            } catch (err: any) {
+              console.warn('[admin] CDN purge skipped:', err?.message || err);
+            }
+          }
+          console.log(`[admin] manual sync: ${JSON.stringify(result)} cdnPurged=${cdnPurged} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+          return json(200, { result, ...info, cdnPurged, seconds: Math.round((Date.now() - started) / 1000) });
         } finally {
           manualSyncRunning = false;
         }
