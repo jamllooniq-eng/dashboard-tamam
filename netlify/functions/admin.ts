@@ -10,7 +10,10 @@ import {
   ManualProductInput,
   MANUAL_ID_PREFIX,
 } from '../../server/supabase.server';
-import { syncFullCatalog } from '../../server/rolemall.server';
+import { syncFullCatalog, getCatalogSyncInfo } from '../../server/rolemall.server';
+
+// One manual sync at a time per function instance (the button is also disabled while it runs)
+let manualSyncRunning = false;
 
 /**
  * Admin API for the /admin dashboard (manual products).
@@ -174,17 +177,6 @@ export const handler: Handler = async (event) => {
         return json(200, { products });
       }
 
-      case 'sync': {
-        if (event.httpMethod !== 'POST') return json(405, { error: 'Method Not Allowed' });
-        const started = Date.now();
-        const result = await syncFullCatalog();
-        const seconds = ((Date.now() - started) / 1000).toFixed(1);
-        if (!result.ok) {
-          return json(502, { error: result.reason || 'فشلت مزامنة المنتجات.', result, seconds });
-        }
-        return json(200, { success: true, result, seconds });
-      }
-
       case 'create': {
         if (event.httpMethod !== 'POST') return json(405, { error: 'Method Not Allowed' });
         const parsed = parseProductInput(body);
@@ -221,6 +213,28 @@ export const handler: Handler = async (event) => {
         if (bytes.length > MAX_IMAGE_BYTES) return json(400, { error: 'حجم الصورة كبير جداً (الحد 4 ميغا).' });
         const url = await uploadProductImage(bytes, contentType, ext);
         return json(200, { url });
+      }
+
+      case 'sync-status': {
+        const info = await getCatalogSyncInfo();
+        return json(200, info);
+      }
+
+      case 'sync': {
+        // Same full sync the hourly job runs (syncFullCatalog). It never overwrites the saved
+        // catalog when Rolemall fails, returns nothing, or returns far fewer products.
+        if (event.httpMethod !== 'POST') return json(405, { error: 'Method Not Allowed' });
+        if (manualSyncRunning) return json(409, { error: 'المزامنة شغّالة حالياً، انتظر لحد ما تخلص.' });
+        manualSyncRunning = true;
+        try {
+          const started = Date.now();
+          const result = await syncFullCatalog();
+          const info = await getCatalogSyncInfo();
+          console.log(`[admin] manual sync: ${JSON.stringify(result)} in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+          return json(200, { result, ...info, seconds: Math.round((Date.now() - started) / 1000) });
+        } finally {
+          manualSyncRunning = false;
+        }
       }
 
       default:

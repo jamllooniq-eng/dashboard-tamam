@@ -297,12 +297,17 @@
     </section>
 
     <section class="panel" aria-labelledby="listTitle">
-      <div class="list-head" style="gap:12px;flex-wrap:wrap">
-        <h2 id="listTitle">منتجاتك</h2>
-        <div style="display:flex;align-items:center;gap:8px;margin-inline-start:auto">
-          <span id="count" class="count"></span>
-          <button id="syncBtn" class="btn" type="button" style="padding:8px 12px">🔄 مزامنة كل المنتجات</button>
+      <div style="border: 1px solid var(--line); border-radius: 14px; padding: 14px; margin-bottom: 18px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px">
+        <div style="min-width: 0">
+          <div style="font-weight: 800">منتجات رولمول المحفوظة</div>
+          <div id="syncInfo" class="hint" style="margin-top: 2px">...</div>
         </div>
+        <button id="syncBtn" class="btn" type="button">🔄 مزامنة كل المنتجات</button>
+        <div id="syncMsg" class="msg" style="width: 100%; margin: 0" hidden></div>
+      </div>
+      <div class="list-head">
+        <h2 id="listTitle">منتجاتك</h2>
+        <span id="count" class="count"></span>
       </div>
       <div id="listMsg" class="msg err" hidden></div>
       <div id="items" class="items"></div>
@@ -363,8 +368,60 @@
     $('loginView').hidden = true;
     $('appView').hidden = false;
     $('logoutBtn').hidden = false;
+    loadSyncInfo();
     await loadList();
   }
+
+  // ---------- manual Rolemall sync (same full sync as the hourly job) ----------
+  function syncInfoText(info) {
+    if (!info || !info.lastSyncAt) return 'ما صارت مزامنة كاملة بعد.';
+    const when = new Date(info.lastSyncAt).toLocaleString('ar-IQ', { dateStyle: 'medium', timeStyle: 'short' });
+    return `آخر مزامنة ناجحة: ${when} · ${fmt(info.products)} منتج محفوظ`;
+  }
+
+  async function loadSyncInfo() {
+    try {
+      $('syncInfo').textContent = syncInfoText(await api('sync-status'));
+    } catch {
+      $('syncInfo').textContent = 'تعذر قراءة حالة المزامنة.';
+    }
+  }
+
+  const SYNC_REASONS = {
+    'ROLEMALL_API_TOKEN missing': 'توكن رولمول غير موجود بمتغيرات Netlify.',
+    'Rolemall unavailable or empty': 'رولمول ما رد أو رجّع قائمة فارغة.',
+    'no valid products': 'رولمول ما رجّع منتجات صالحة.',
+    'saving catalog failed': 'تعذر الحفظ في قاعدة البيانات.',
+  };
+  function syncReasonText(reason) {
+    if (!reason) return 'سبب غير معروف.';
+    if (SYNC_REASONS[reason]) return SYNC_REASONS[reason];
+    if (/page\(s\) failed/.test(reason)) return 'بعض صفحات رولمول ما تحملت.';
+    if (/keeping previous snapshot/.test(reason)) return 'رولمول رجّع عدد منتجات أقل بكثير من المعتاد.';
+    return reason;
+  }
+
+  $('syncBtn').addEventListener('click', async () => {
+    const btn = $('syncBtn');
+    btn.disabled = true;
+    btn.textContent = 'جاري المزامنة...';
+    show($('syncMsg'), 'تسحب كل منتجات رولمول وتحفظها، وممكن تاخذ لحد دقيقة. خلّي الصفحة مفتوحة.', 'ok');
+    try {
+      const data = await api('sync', {});
+      if (data.result && data.result.ok) {
+        show($('syncMsg'), `✅ تمت المزامنة: ${fmt(data.result.products)} منتج انحفظ بأحدث الأسعار (${data.seconds} ثانية).`, 'ok');
+      } else {
+        show($('syncMsg'), `⚠️ ما تمت المزامنة: ${syncReasonText(data.result && data.result.reason)} النسخة المحفوظة القديمة ما تغيّرت، والموقع يكمل يستخدمها.`, 'err');
+      }
+      $('syncInfo').textContent = syncInfoText(data);
+    } catch (err) {
+      show($('syncMsg'), `⚠️ ${err.message || 'تعذر إكمال المزامنة'}. النسخة المحفوظة القديمة ما تغيّرت.`, 'err');
+      loadSyncInfo();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '🔄 مزامنة كل المنتجات';
+    }
+  });
 
   // ---------- login ----------
   $('loginForm').addEventListener('submit', async (e) => {
@@ -386,25 +443,6 @@
   $('logoutBtn').addEventListener('click', logout);
 
   // ---------- list ----------
-  async function syncCatalog() {
-    const btn = $('syncBtn');
-    btn.disabled = true;
-    const oldText = btn.textContent;
-    btn.textContent = '⏳ جارِ المزامنة...';
-    show($('listMsg'), 'جارِ مزامنة المنتجات من RoleMall...', 'ok');
-    try {
-      const data = await api('sync', {});
-      const r = data.result || {};
-      show($('listMsg'), `تمت المزامنة بنجاح: ${Number(r.products || 0).toLocaleString('en-US')} منتج في ${data.seconds || '?'} ثانية.`, 'ok');
-      await loadList();
-    } catch (err) {
-      show($('listMsg'), `فشلت المزامنة: ${err.message}`);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = oldText;
-    }
-  }
-
   async function loadList() {
     show($('listMsg'), '');
     try {
@@ -415,8 +453,6 @@
       show($('listMsg'), err.message);
     }
   }
-
-  $('syncBtn').addEventListener('click', syncCatalog);
 
   function renderList() {
     const items = $('items');

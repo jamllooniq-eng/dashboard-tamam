@@ -177,13 +177,24 @@ async function loadCatalogSnapshot(): Promise<RolemallProduct[]> {
   if (catalogSnapshot && now - catalogSnapshot.loadedAt < CATALOG_MEMORY_TTL_MS) {
     return catalogSnapshot.products;
   }
-  const remote = await kvGet<RolemallProduct[]>(CATALOG_KEY);
-  if (remote && Array.isArray(remote.data)) {
-    catalogSnapshot = { products: remote.data, loadedAt: now };
-    return remote.data;
+  // Callers arriving at the same time share one download
+  if (!catalogSnapshotLoading) {
+    catalogSnapshotLoading = (async () => {
+      // catalog_all holds every product (several MB): the short storefront timeout is too short for it,
+      // and a slow download of this one row must not trip the breaker for all other Supabase reads.
+      const remote = await kvGet<RolemallProduct[]>(CATALOG_KEY, { timeoutMs: 5000, tripBreaker: false });
+      if (remote && Array.isArray(remote.data)) {
+        catalogSnapshot = { products: remote.data, loadedAt: Date.now() };
+        return remote.data;
+      }
+      return catalogSnapshot?.products || [];
+    })().finally(() => {
+      catalogSnapshotLoading = null;
+    });
   }
-  return catalogSnapshot?.products || [];
+  return catalogSnapshotLoading;
 }
+let catalogSnapshotLoading: Promise<RolemallProduct[]> | null = null;
 
 /**
  * During an outage, only trust saved copies of products that were still in the latest
@@ -927,6 +938,16 @@ async function fetchProductDetailsDirect(pId: string, allowRescue = true): Promi
   }
 }
 
+// How long a product page waits for the supplier before falling back to the saved catalog copy
+const SUPPLIER_WAIT_BEFORE_SAVED_COPY_MS = 2500;
+
+/** A product from the latest full-catalog sync stored in Supabase (catalog_ids checked first: a few KB). */
+async function findInSavedCatalog(pId: string): Promise<RolemallProduct | null> {
+  const ids = await loadCatalogIds();
+  if (!ids || !ids.has(pId)) return null;
+  return (await loadCatalogSnapshot()).find((p) => String(p.id) === pId) || null;
+}
+
 /**
  * Triggers background revalidation for stale product details (Stale-While-Revalidate)
  */
@@ -985,8 +1006,19 @@ async function getRolemallProductDetails(productId: string | number): Promise<Pr
     return { product: cached.data, status: 'found' };
   }
 
-  // 3. Cache Miss: Fetch synchronously via Singleflight
-  let fetchResult = await fetchProductDetailsDirect(pId);
+  // 3. Cache Miss: Fetch synchronously via Singleflight.
+  //    If the supplier is slow and this product is in the latest synced catalog saved in Supabase,
+  //    show the saved copy instead of waiting (the supplier request keeps running and refreshes the cache).
+  const directFetch = fetchProductDetailsDirect(pId);
+  const early = await Promise.race([
+    directFetch,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), SUPPLIER_WAIT_BEFORE_SAVED_COPY_MS)),
+  ]);
+  if (early === null) {
+    const saved = await findInSavedCatalog(pId);
+    if (saved) return { product: saved, status: 'found' };
+  }
+  let fetchResult = early ?? (await directFetch);
   if (fetchResult.status === 'found' && fetchResult.product) {
     return fetchResult;
   }
@@ -1215,4 +1247,12 @@ export async function syncFullCatalog(): Promise<CatalogSyncResult> {
 
   catalogSnapshot = { products, loadedAt: now };
   return { ok: true, products: products.length, pages: totalPages };
+}
+
+
+/** Last successful full sync, for the admin dashboard (reads the small catalog_ids row). */
+export async function getCatalogSyncInfo(): Promise<{ lastSyncAt: number | null; products: number }> {
+  const remote = await kvGet<string[]>(CATALOG_IDS_KEY, { timeoutMs: 5000, tripBreaker: false });
+  if (!remote || !Array.isArray(remote.data)) return { lastSyncAt: null, products: 0 };
+  return { lastSyncAt: remote.timestamp, products: remote.data.length };
 }

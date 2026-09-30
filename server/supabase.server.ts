@@ -70,7 +70,8 @@ async function sbFetch(
   pathAndQuery: string,
   init: RequestInit = {},
   timeoutMs = 6000,
-  bypassBreaker = false
+  bypassBreaker = false,
+  tripOnFailure = true
 ): Promise<Response> {
   if (!bypassBreaker && !isSupabaseReachable()) {
     throw new Error('Supabase temporarily skipped (recent failure)');
@@ -83,10 +84,10 @@ async function sbFetch(
       signal: controller.signal,
       headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) },
     });
-    if (res.status >= 500) tripBreaker(`HTTP ${res.status}`);
+    if (res.status >= 500 && tripOnFailure) tripBreaker(`HTTP ${res.status}`);
     return res;
   } catch (err: any) {
-    tripBreaker(err?.name === 'AbortError' ? 'timeout' : err?.message || 'network error');
+    if (tripOnFailure) tripBreaker(err?.name === 'AbortError' ? 'timeout' : err?.message || 'network error');
     throw err;
   } finally {
     clearTimeout(timer);
@@ -100,13 +101,18 @@ const STOREFRONT_TIMEOUT_MS = 1500;
 // Persistent cache (key/value)
 // ---------------------------------------------------------------------------
 
-export async function kvGet<T>(key: string): Promise<{ data: T; timestamp: number } | null> {
+export async function kvGet<T>(
+  key: string,
+  options: { timeoutMs?: number; tripBreaker?: boolean } = {}
+): Promise<{ data: T; timestamp: number } | null> {
   if (!isSupabaseConfigured()) return null;
   try {
     const res = await sbFetch(
       `/rest/v1/cache_entries?key=eq.${encodeURIComponent(key)}&select=data,updated_at&limit=1`,
       {},
-      STOREFRONT_TIMEOUT_MS
+      options.timeoutMs ?? STOREFRONT_TIMEOUT_MS,
+      false,
+      options.tripBreaker ?? true
     );
     if (!res.ok) return null;
     const rows = await res.json();
