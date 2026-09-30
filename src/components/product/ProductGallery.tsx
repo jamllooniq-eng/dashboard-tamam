@@ -66,8 +66,8 @@ export const ProductGallery: React.FC<ProductGalleryProps> = ({
                   <img
                     src={proxiedUrls[idx]}
                     alt={`${title} - صورة ${idx + 1}`}
-                    fetchPriority={idx === 0 ? 'high' : 'auto'}
-                    loading="eager"
+                    fetchPriority={idx === 0 ? 'high' : 'low'}
+                    loading={idx === 0 ? 'eager' : 'lazy'}
                     referrerPolicy="no-referrer"
                     decoding="async"
                     draggable={false}

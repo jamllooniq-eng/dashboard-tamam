@@ -121,7 +121,7 @@ export function generateHeadTags(options: GenerateSeoOptions): string {
 
   // Preload main product image for instant LCP on product pages
   if (options.view === 'product' && options.product?.image) {
-    const proxiedImageUrl = getOptimizedImageUrl(options.product.image, { width: 800, quality: 80, fit: 'contain' });
+    const proxiedImageUrl = getOptimizedImageUrl(options.product.image, { width: 800, quality: 72, fit: 'contain' });
     tags.push(`<link rel="preload" as="image" href="${escapeHtml(proxiedImageUrl)}" fetchpriority="high" />`);
   }
 
