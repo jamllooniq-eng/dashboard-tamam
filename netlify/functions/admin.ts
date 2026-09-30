@@ -174,6 +174,17 @@ export const handler: Handler = async (event) => {
         return json(200, { products });
       }
 
+      case 'sync': {
+        if (event.httpMethod !== 'POST') return json(405, { error: 'Method Not Allowed' });
+        const started = Date.now();
+        const result = await syncFullCatalog();
+        const seconds = ((Date.now() - started) / 1000).toFixed(1);
+        if (!result.ok) {
+          return json(502, { error: result.reason || 'فشلت مزامنة المنتجات.', result, seconds });
+        }
+        return json(200, { success: true, result, seconds });
+      }
+
       case 'create': {
         if (event.httpMethod !== 'POST') return json(405, { error: 'Method Not Allowed' });
         const parsed = parseProductInput(body);
