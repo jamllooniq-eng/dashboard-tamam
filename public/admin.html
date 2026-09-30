@@ -386,6 +386,25 @@
   $('logoutBtn').addEventListener('click', logout);
 
   // ---------- list ----------
+  async function syncCatalog() {
+    const btn = $('syncBtn');
+    btn.disabled = true;
+    const oldText = btn.textContent;
+    btn.textContent = '⏳ جارِ المزامنة...';
+    show($('listMsg'), 'جارِ مزامنة المنتجات من RoleMall...', 'ok');
+    try {
+      const data = await api('sync', {});
+      const r = data.result || {};
+      show($('listMsg'), `تمت المزامنة بنجاح: ${Number(r.products || 0).toLocaleString('en-US')} منتج في ${data.seconds || '?'} ثانية.`, 'ok');
+      await loadList();
+    } catch (err) {
+      show($('listMsg'), `فشلت المزامنة: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = oldText;
+    }
+  }
+
   async function loadList() {
     show($('listMsg'), '');
     try {
@@ -394,28 +413,6 @@
       renderList();
     } catch (err) {
       show($('listMsg'), err.message);
-    }
-  }
-
-  async function syncCatalog() {
-    const btn = $('syncBtn');
-    btn.disabled = true;
-    const oldText = btn.textContent;
-    btn.textContent = '⏳ جارِ المزامنة...';
-    show($('listMsg'), 'جارِ مزامنة المنتجات من RoleMall إلى Supabase...', 'ok');
-    try {
-      const data = await api('sync', {});
-      const r = data.result || {};
-      show(
-        $('listMsg'),
-        `تمت المزامنة بنجاح: ${Number(r.products || 0).toLocaleString('en-US')} منتج في ${data.seconds || '?'} ثانية.`,
-        'ok'
-      );
-    } catch (err) {
-      show($('listMsg'), `فشلت المزامنة: ${err.message}`);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = oldText;
     }
   }
 
