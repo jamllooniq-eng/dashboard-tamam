@@ -1,5 +1,15 @@
 import React, { useMemo } from 'react';
-import { ShieldCheck, CheckCircle2, Check, ClipboardList } from 'lucide-react';
+import {
+  ShieldCheck,
+  CheckCircle2,
+  Check,
+  Package,
+  Sparkles,
+  Layers,
+  Sliders,
+  CheckCheck,
+  FileText
+} from 'lucide-react';
 
 interface ProductDetailsBoxProps {
   title?: string;
@@ -8,39 +18,11 @@ interface ProductDetailsBoxProps {
   variant?: 'full' | 'header' | 'body';
 }
 
-type SectionType = 'intro' | 'features' | 'specs' | 'box';
-
 interface ParsedSection {
   title?: string;
-  type: SectionType;
+  type: 'intro' | 'features' | 'specs' | 'box';
   items: Array<{ key?: string; text: string }>;
 }
-
-// Known section headings (Rolemall descriptions use many wordings)
-const BOX_HEADING =
-  /^(المحتويات|محتويات\s*(العلبة|الصندوق|المنتج|الطقم|الحزمة|العبوة)|محتوى\s*(العلبة|الصندوق)|مكونات\s*(العلبة|المنتج|الطقم)|المرفقات|مرفقات\s*المنتج|داخل\s*العلبة|في\s*العلبة|يأتي\s*مع)/i;
-const SPECS_HEADING =
-  /^(المواصفات\s*الفنية|المواصفات\s*الرئيسية|المواصفات|المعايير\s*الفنية|بيانات\s*المنتج|تفاصيل\s*تقنية)/i;
-const FEATURES_HEADING = /^(المميزات|مميزات\s*المنتج|أبرز\s*المميزات|خصائص\s*المنتج|الخصائص|الفوائد)/i;
-
-const BULLET = /^[.،•\-\*+✔✓▪●○◦·]+/;
-
-/** Short paragraphs of 2 sentences (no regex lookbehind, so it also works on older iPhones). */
-function toParagraphs(text: string): string[] {
-  const sentences = (text.match(/[^.!؟?]+[.!؟?]*/g) || [text]).map((s) => s.trim()).filter(Boolean);
-  const paragraphs: string[] = [];
-  for (let i = 0; i < sentences.length; i += 2) paragraphs.push(sentences.slice(i, i + 2).join(' '));
-  return paragraphs;
-}
-
-/** Section title: green text with a thin line after it */
-const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="flex items-center gap-3">
-    <span className="w-1.5 h-5 shrink-0 rounded-full bg-[#22A39E]" aria-hidden="true" />
-    <h3 className="shrink-0 text-[15px] sm:text-base font-bold text-gray-900">{children}</h3>
-    <span className="h-px flex-1 bg-gray-100" aria-hidden="true" />
-  </div>
-);
 
 export const ProductDetailsBox: React.FC<ProductDetailsBoxProps> = ({
   title = '',
@@ -48,75 +30,120 @@ export const ProductDetailsBox: React.FC<ProductDetailsBoxProps> = ({
   features = [],
   variant = 'full',
 }) => {
-  const sections = useMemo<ParsedSection[]>(() => {
-    if (!description && (!features || features.length === 0)) return [];
+  // Parse description intelligently without losing any words or text
+  const { introText, sections, allPoints } = useMemo(() => {
+    if (!description && (!features || features.length === 0)) {
+      return { introText: '', sections: [], allPoints: [] };
+    }
 
     const rawLines = (description || '')
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
 
-    const parsed: ParsedSection[] = [];
-    let current: ParsedSection = { type: 'features', items: [] };
-    let bulletedLinesInFirst = 0;
-    let isFirstSection = true;
-
-    const startSection = (heading: string, type: SectionType) => {
-      if (current.items.length > 0) parsed.push(current);
-      current = { title: heading.replace(/[:：]/g, '').trim(), type, items: [] };
-      isFirstSection = false;
+    const parsedSections: ParsedSection[] = [];
+    let currentSection: ParsedSection = {
+      type: 'features',
+      items: [],
     };
 
-    rawLines.forEach((line) => {
-      const hadBullet = BULLET.test(line);
-      const clean = line.replace(BULLET, '').trim();
-      if (!clean) return;
+    let firstLineIntro = '';
 
-      // Headings: known titles, or any short line ending with ":" (e.g. "طريقة الاستخدام:")
-      const headingText = clean.replace(/[:：]\s*$/, '');
-      if (headingText.length <= 30) {
-        if (BOX_HEADING.test(headingText)) return startSection(headingText, 'box');
-        if (SPECS_HEADING.test(headingText)) return startSection(headingText, 'specs');
-        if (FEATURES_HEADING.test(headingText)) return startSection(headingText, 'features');
-        if (/[:：]\s*$/.test(clean) && headingText.length <= 25) return startSection(headingText, 'features');
+    rawLines.forEach((line, index) => {
+      // Clean leading bullet marks / numbers / dots
+      const cleanLine = line.replace(/^[.،•\-\*+✔✓\s]+/, '').trim();
+      if (!cleanLine) return;
+
+      // Section header detection
+      if (
+        /^(محتويات\s*العلبة|محتويات\s*الصندوق|مرفقات\s*المنتج|محتوى\s*العلبة|المرفقات)/i.test(
+          cleanLine
+        )
+      ) {
+        if (currentSection.items.length > 0) {
+          parsedSections.push(currentSection);
+        }
+        currentSection = {
+          title: cleanLine.replace(/[:：]/g, '').trim(),
+          type: 'box',
+          items: [],
+        };
+        return;
       }
 
-      if (isFirstSection && hadBullet) bulletedLinesInFirst++;
+      if (
+        /^(المواصفات\s*الفنية|المواصفات|المعايير\s*الفنية|المواصفات\s*الرئيسية|بيانات\s*المنتج)/i.test(
+          cleanLine
+        )
+      ) {
+        if (currentSection.items.length > 0) {
+          parsedSections.push(currentSection);
+        }
+        currentSection = {
+          title: cleanLine.replace(/[:：]/g, '').trim(),
+          type: 'specs',
+          items: [],
+        };
+        return;
+      }
 
-      const colon = clean.indexOf(':');
-      if (colon > 1 && colon < 35 && clean.length < 90) {
-        current.items.push({ key: clean.slice(0, colon).trim(), text: clean.slice(colon + 1).trim() });
+      if (
+        /^(المميزات|مميزات\s*المنتج|أبرز\s*المميزات|خصائص\s*المنتج)/i.test(
+          cleanLine
+        )
+      ) {
+        if (currentSection.items.length > 0) {
+          parsedSections.push(currentSection);
+        }
+        currentSection = {
+          title: cleanLine.replace(/[:：]/g, '').trim(),
+          type: 'features',
+          items: [],
+        };
+        return;
+      }
+
+      // Check if line is a Key-Value pair (e.g., 'الموديل: E-17', 'القدرة: 2400 واط')
+      const colonIndex = cleanLine.indexOf(':');
+      if (colonIndex > 1 && colonIndex < 35 && cleanLine.length < 90) {
+        const key = cleanLine.slice(0, colonIndex).trim();
+        const text = cleanLine.slice(colonIndex + 1).trim();
+        currentSection.items.push({ key, text });
       } else {
-        current.items.push({ text: clean });
+        currentSection.items.push({ text: cleanLine });
       }
     });
-    if (current.items.length > 0) parsed.push(current);
 
-    // Untitled opening text: sentences split over several lines read better as paragraphs.
-    // Short, bulleted or "key: value" lines stay a list.
-    const first = parsed[0];
-    if (first && !first.title) {
-      const plain = first.items.filter((i) => !i.key);
-      const avgLength = plain.reduce((sum, i) => sum + i.text.length, 0) / Math.max(1, plain.length);
-      if (plain.length === first.items.length && bulletedLinesInFirst === 0 && avgLength >= 30) {
-        first.type = 'intro';
-      }
+    if (currentSection.items.length > 0) {
+      parsedSections.push(currentSection);
     }
 
-    // Extra features that are not already written in the description
-    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, '');
-    const existing = new Set(rawLines.map(norm));
-    const extra = (features || []).filter((f) => {
-      const c = norm(String(f || '').trim());
-      return c.length > 0 && !existing.has(c);
+    // Also include extra unique features if provided separately
+    const existingTexts = new Set(
+      rawLines.map((l) => l.toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]/g, ''))
+    );
+    const extraFeatures = (features || []).filter((f) => {
+      const clean = String(f || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9\u0600-\u06FF]/g, '');
+      return clean.length > 0 && !existingTexts.has(clean);
     });
-    if (extra.length > 0) {
-      parsed.push({ title: 'مميزات إضافية', type: 'features', items: extra.map((f) => ({ text: f })) });
+
+    if (extraFeatures.length > 0) {
+      parsedSections.push({
+        title: 'مميزات إضافية',
+        type: 'features',
+        items: extraFeatures.map((f) => ({ text: f })),
+      });
     }
-    return parsed;
+
+    return { introText: firstLineIntro, sections: parsedSections, allPoints: rawLines };
   }, [description, features]);
 
-  if (!title && sections.length === 0 && !description) return null;
+  if (!title && sections.length === 0 && !description) {
+    return null;
+  }
 
   const showHeader = variant === 'full' || variant === 'header';
   const showBody = variant === 'full' || variant === 'body';
@@ -124,122 +151,146 @@ export const ProductDetailsBox: React.FC<ProductDetailsBoxProps> = ({
   return (
     <div
       id={`product-details-box-${variant}`}
-      className={`rounded-2xl bg-white border border-gray-200 p-5 sm:p-7 space-y-7 shadow-[0_1px_3px_rgba(16,24,40,0.04)] ${
-        variant === 'body' ? 'border-t-4 border-t-[#22A39E]' : ''
-      }`}
+      className="rounded-2xl bg-white border border-gray-200/90 p-4 sm:p-6 shadow-sm space-y-5"
     >
-      {/* Title + trust badges */}
+      {/* 1. Product Title Heading */}
       {showHeader && title && (
-        <div className={`space-y-3.5 min-w-0 ${showBody ? 'pb-6 border-b border-gray-100' : ''}`}>
+        <div className={`space-y-3.5 min-w-0 ${showBody ? 'pb-4 border-b border-gray-100' : ''}`}>
           <h1
             id={`product-title-heading-${variant}`}
-            className="text-xl sm:text-2xl font-black text-gray-900 leading-snug break-words"
+            className="text-base sm:text-xl md:text-2xl font-black text-gray-900 leading-snug tracking-tight break-words"
           >
             {title}
           </h1>
-          <div className="flex flex-wrap gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#22A39E]/[0.08] px-3 py-1.5 text-[13px] sm:text-sm font-bold text-[#177773]">
-              <ShieldCheck className="w-4 h-4 shrink-0" />
-              منتج أصلي 100%
-            </span>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#22A39E]/[0.08] px-3 py-1.5 text-[13px] sm:text-sm font-bold text-[#177773]">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              فحص قبل الاستلام
-            </span>
+
+          {/* 2. Trust Badges Row */}
+          <div className="grid grid-cols-2 gap-2 pt-0.5">
+            <div className="flex items-center justify-center gap-1.5 sm:gap-2 bg-[#22A39E]/[0.05] border border-[#22A39E]/15 rounded-xl py-2 px-2 sm:px-3 text-center min-w-0">
+              <ShieldCheck className="w-4 h-4 text-[#22A39E] shrink-0" />
+              <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-800 truncate">
+                منتج أصلي 100%
+              </span>
+            </div>
+            <div className="flex items-center justify-center gap-1.5 sm:gap-2 bg-[#22A39E]/[0.05] border border-[#22A39E]/15 rounded-xl py-2 px-2 sm:px-3 text-center min-w-0">
+              <CheckCircle2 className="w-4 h-4 text-[#22A39E] shrink-0" />
+              <span className="text-[11px] sm:text-xs md:text-sm font-bold text-gray-800 truncate">
+                فحص قبل الاستلام
+              </span>
+            </div>
           </div>
         </div>
       )}
 
       {showBody && (
-        <div className="space-y-7 min-w-0">
-          {/* Box heading */}
-          <div className="flex items-center gap-3 pb-5 border-b border-gray-100">
-            <span className="flex w-11 h-11 shrink-0 items-center justify-center rounded-xl bg-[#22A39E]/10">
-              <ClipboardList className="w-5 h-5 text-[#177773]" />
-            </span>
+        <>
+          {/* 3. Section Title Indicator — bigger, bolder, more prominent header bar */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#22A39E]/10 flex items-center justify-center shrink-0">
+              <FileText className="w-5 h-5 text-[#22A39E]" />
+            </div>
             <div className="min-w-0">
-              <h2 className="text-lg sm:text-xl font-black text-gray-900 leading-tight">تفاصيل المنتج</h2>
-              <p className="mt-1 text-[13px] sm:text-sm text-gray-500">كل ما تحتاج معرفته قبل الطلب</p>
+              <h2 className="text-base sm:text-lg md:text-xl font-black text-gray-900 truncate">
+                تفاصيل ومواصفات المنتج
+              </h2>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#22A39E] animate-pulse shrink-0"></span>
+                <span className="text-[11px] sm:text-xs font-semibold text-gray-500">
+                  كل ما تحتاج معرفته قبل الطلب
+                </span>
+              </div>
             </div>
           </div>
 
-          {sections.length > 0 ? (
-            sections.map((sec, secIdx) => (
-              <section key={secIdx} className="space-y-4 min-w-0">
-                {sec.title && <SectionTitle>{sec.title}</SectionTitle>}
+          {/* 4. Structured & High-Readability Product Details */}
+          <div className="space-y-4 min-w-0">
+            {sections.length > 0 ? (
+              sections.map((sec, secIdx) => (
+                <div key={secIdx} className="space-y-2.5 min-w-0">
+                  {/* Optional Subsection Header */}
+                  {sec.title && (
+                    <div className="flex items-center gap-2 text-xs sm:text-sm font-black text-[#177773] bg-[#22A39E]/[0.08] border border-[#22A39E]/25 px-3 py-2 rounded-xl w-fit max-w-full">
+                      {sec.type === 'box' ? (
+                        <Package className="w-4 h-4 shrink-0" />
+                      ) : sec.type === 'specs' ? (
+                        <Sliders className="w-4 h-4 shrink-0" />
+                      ) : (
+                        <Sparkles className="w-4 h-4 shrink-0" />
+                      )}
+                      <span className="break-words">{sec.title}</span>
+                    </div>
+                  )}
 
-                {sec.type === 'intro' ? (
-                  /* Opening text: short paragraphs, the first one slightly stronger */
-                  <div className="space-y-4">
-                    {toParagraphs(sec.items.map((i) => i.text).join(' ')).map((p, i) => (
-                      <p
-                        key={i}
-                        className={`text-base leading-8 break-words ${i === 0 ? 'text-gray-900 font-medium' : 'text-gray-600'}`}
-                      >
-                        {p}
-                      </p>
-                    ))}
-                  </div>
-                ) : sec.type === 'specs' ? (
-                  /* Specifications: name on the right, value on the left */
-                  <dl className="rounded-xl bg-gray-50 px-4 divide-y divide-gray-200/70">
-                    {sec.items.map((item, i) => (
-                      <div key={i} className="flex items-start justify-between gap-4 py-3 text-[15px]">
-                        {item.key ? (
-                          <>
-                            <dt className="text-gray-500 shrink-0">{item.key}</dt>
-                            <dd className="text-gray-900 font-bold text-left break-words min-w-0">{item.text}</dd>
-                          </>
-                        ) : (
-                          <dd className="text-gray-800 break-words min-w-0">{item.text}</dd>
-                        )}
-                      </div>
-                    ))}
-                  </dl>
-                ) : sec.type === 'box' ? (
-                  /* What's in the box: one calm grouped list, quantity in bold */
-                  <ul className="rounded-xl bg-gray-50 px-4 divide-y divide-gray-200/70">
-                    {sec.items.map((item, i) => {
-                      const line = item.key ? `${item.key}: ${item.text}` : item.text;
-                      const qty = line.match(/^(\d+)\s*[x×]?\s*(.+)$/i);
-                      return (
-                        <li key={i} className="flex items-center gap-3 py-3 text-[15px] text-gray-800 min-w-0">
-                          <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-[#22A39E]" aria-hidden="true" />
-                          <span className="leading-relaxed break-words min-w-0">
-                            {qty ? (
-                              <>
-                                <strong className="font-bold text-gray-900">{qty[1]}</strong> {qty[2]}
-                              </>
-                            ) : (
-                              line
+                  {/* Box Contents Render */}
+                  {sec.type === 'box' ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 bg-amber-50/60 border border-amber-200/70 p-3.5 rounded-2xl">
+                      {sec.items.map((item, iIdx) => (
+                        <div
+                          key={iIdx}
+                          className="flex items-center gap-2 text-xs sm:text-sm font-medium text-gray-800 min-w-0"
+                        >
+                          <div className="w-5 h-5 rounded-full bg-amber-200/80 flex items-center justify-center text-amber-800 shrink-0">
+                            <Package className="w-3 h-3" />
+                          </div>
+                          <span className="leading-snug break-words min-w-0 flex-1">{item.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : sec.type === 'specs' ? (
+                    /* Specs Key-Value Table/Grid */
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-gray-50/80 border border-gray-150 p-3 rounded-2xl">
+                      {sec.items.map((item, iIdx) => (
+                        <div
+                          key={iIdx}
+                          className="flex items-center justify-between gap-2 bg-white px-3.5 py-2.5 rounded-xl border border-gray-100 text-xs sm:text-sm shadow-xs min-w-0"
+                        >
+                          {item.key ? (
+                            <>
+                              <span className="font-bold text-gray-600 shrink-0">
+                                {item.key}:
+                              </span>
+                              <span className="font-semibold text-gray-900 text-left dir-ltr break-words min-w-0">
+                                {item.text}
+                              </span>
+                            </>
+                          ) : (
+                            <span className="font-medium text-gray-800 break-words min-w-0">{item.text}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* Main Features / Points List - Clear, engaging, zero empty gaps */
+                    <div className="space-y-2 min-w-0">
+                      {sec.items.map((item, iIdx) => (
+                        <div
+                          key={iIdx}
+                          className="flex items-start gap-3 p-3 sm:p-3.5 rounded-xl bg-gray-50/70 hover:bg-[#22A39E]/[0.05] transition-colors border border-gray-100/90 text-right min-w-0"
+                        >
+                          <div className="w-6 h-6 rounded-full bg-[#22A39E]/10 flex items-center justify-center text-[#22A39E] shrink-0 mt-0.5">
+                            <Check className="w-4 h-4 stroke-[2.5]" />
+                          </div>
+                          <div className="text-xs sm:text-[14.5px] leading-relaxed text-gray-800 font-medium break-words min-w-0 flex-1">
+                            {item.key && (
+                              <span className="font-bold text-gray-900 ml-1.5">
+                                {item.key}:
+                              </span>
                             )}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : (
-                  /* Features: clear checklist with comfortable spacing */
-                  <ul className="space-y-3.5">
-                    {sec.items.map((item, i) => (
-                      <li key={i} className="flex items-start gap-3 min-w-0">
-                        <span className="mt-1 flex w-5 h-5 shrink-0 items-center justify-center rounded-full bg-[#22A39E]/10">
-                          <Check className="w-3.5 h-3.5 text-[#177773] stroke-[3]" />
-                        </span>
-                        <p className="text-[15px] sm:text-base leading-7 text-gray-800 break-words min-w-0">
-                          {item.key && <span className="font-bold text-gray-900">{item.key}: </span>}
-                          {item.text}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
-            ))
-          ) : (
-            <p className="text-base leading-8 text-gray-700 whitespace-pre-line break-words">{description}</p>
-          )}
-        </div>
+                            <span>{item.text}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
+              /* Fallback clean description */
+              <div className="text-gray-800 text-sm leading-relaxed p-4 bg-gray-50/70 rounded-2xl border border-gray-100 break-words">
+                {description}
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   );
