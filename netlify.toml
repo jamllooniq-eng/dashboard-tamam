@@ -49,10 +49,6 @@
   to = "/.netlify/functions/robots"
   status = 200
 [[redirects]]
-  from = "/feed.xml"
-  to = "/.netlify/functions/feed"
-  status = 200
-[[redirects]]
   from = "/admin"
   to = "/admin.html"
   status = 200
