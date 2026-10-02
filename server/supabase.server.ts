@@ -48,22 +48,31 @@ function authHeaders(): Record<string, string> {
 }
 
 /**
- * Circuit breaker: Supabase is only a backup for the storefront. If it fails or hangs once,
- * this function instance stops calling it for a minute, so visitors never wait on it and
- * Rolemall products keep loading at full speed.
+ * Circuit breaker: after 2 failures in a row, non-essential Supabase reads are skipped for 20s,
+ * so a slow/unreachable Supabase never slows the shop down. One slow read (e.g. a cold start) is
+ * not enough to trip it, and any successful call resets the count.
+ * Essential reads (the product a customer is opening) bypass the breaker.
  */
-const BREAKER_COOLDOWN_MS = 60 * 1000;
+const BREAKER_COOLDOWN_MS = 20 * 1000;
+const BREAKER_FAILURE_THRESHOLD = 2;
 let breakerOpenUntil = 0;
+let consecutiveFailures = 0;
 
 export function isSupabaseReachable(): boolean {
   return Date.now() >= breakerOpenUntil;
 }
 
 function tripBreaker(reason: string): void {
+  consecutiveFailures++;
+  if (consecutiveFailures < BREAKER_FAILURE_THRESHOLD) return;
   if (Date.now() >= breakerOpenUntil) {
-    console.warn(`[Supabase] unreachable (${reason}); pausing calls for 60s. Rolemall keeps serving products.`);
+    console.warn(`[Supabase] unreachable (${reason}, ${consecutiveFailures} failures in a row); pausing non-essential calls for 20s.`);
   }
   breakerOpenUntil = Date.now() + BREAKER_COOLDOWN_MS;
+}
+
+function markHealthy(): void {
+  consecutiveFailures = 0;
 }
 
 async function sbFetch(
@@ -84,7 +93,11 @@ async function sbFetch(
       signal: controller.signal,
       headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) },
     });
-    if (res.status >= 500 && tripOnFailure) tripBreaker(`HTTP ${res.status}`);
+    if (res.status >= 500) {
+      if (tripOnFailure) tripBreaker(`HTTP ${res.status}`);
+    } else {
+      markHealthy();
+    }
     return res;
   } catch (err: any) {
     if (tripOnFailure) tripBreaker(err?.name === 'AbortError' ? 'timeout' : err?.message || 'network error');
@@ -103,7 +116,7 @@ const STOREFRONT_TIMEOUT_MS = 1500;
 
 export async function kvGet<T>(
   key: string,
-  options: { timeoutMs?: number; tripBreaker?: boolean } = {}
+  options: { timeoutMs?: number; tripBreaker?: boolean; bypassBreaker?: boolean } = {}
 ): Promise<{ data: T; timestamp: number } | null> {
   if (!isSupabaseConfigured()) return null;
   try {
@@ -111,7 +124,7 @@ export async function kvGet<T>(
       `/rest/v1/cache_entries?key=eq.${encodeURIComponent(key)}&select=data,updated_at&limit=1`,
       {},
       options.timeoutMs ?? STOREFRONT_TIMEOUT_MS,
-      false,
+      options.bypassBreaker ?? false,
       options.tripBreaker ?? true
     );
     if (!res.ok) return null;
@@ -287,17 +300,31 @@ export async function listActiveManualProducts(): Promise<ManualProductRow[]> {
 }
 
 /** One manual product, always fresh (used for product pages and to verify price at checkout). */
+// Last successfully read copy of each manual product (per server copy): backup if Supabase is down
+const manualLastGood = new Map<number, ManualProductRow>();
+
+/**
+ * A manual product exists only in Supabase, so this read is ESSENTIAL: it ignores the circuit
+ * breaker, and retries once (2 x 2.5s, inside the product page's 7s budget). If Supabase is really
+ * unreachable, the last good copy is used (the order flow re-checks the price anyway).
+ */
 export async function getManualProduct(id: number): Promise<{ row: ManualProductRow | null; failed: boolean }> {
   if (!isSupabaseConfigured()) return { row: null, failed: true };
-  try {
-    const res = await sbFetch(`/rest/v1/manual_products?id=eq.${id}&select=${MANUAL_COLUMNS}&limit=1`, {}, 4000);
-    if (!res.ok) throw new Error(`status ${res.status}`);
-    const rows = await res.json();
-    return { row: Array.isArray(rows) && rows[0] ? sanitizeRow(rows[0]) : null, failed: false };
-  } catch {
-    const cached = manualCache?.rows.find((r) => r.id === id) || null;
-    return { row: cached, failed: !cached };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await sbFetch(`/rest/v1/manual_products?id=eq.${id}&select=${MANUAL_COLUMNS}&limit=1`, {}, 2500, true);
+      if (!res.ok) throw new Error(`status ${res.status}`);
+      const rows = await res.json();
+      const row = Array.isArray(rows) && rows[0] ? sanitizeRow(rows[0]) : null;
+      if (row) manualLastGood.set(id, row);
+      else manualLastGood.delete(id);
+      return { row, failed: false };
+    } catch {
+      // retry once, then fall back below
+    }
   }
+  const cached = manualLastGood.get(id) || manualCache?.rows.find((r) => r.id === id) || null;
+  return { row: cached, failed: !cached };
 }
 
 // ---- Admin CRUD ----
