@@ -71,10 +71,11 @@ function setDiskCache<T>(key: string, entry: CacheEntry<T>): void {
  * Persistent cache = local /tmp disk (fast, per instance) + Supabase (shared, survives cold starts).
  * Supabase is what keeps the catalog visible when Rolemall is down and the function instance is new.
  */
-async function getPersistedCache<T>(key: string): Promise<CacheEntry<T> | null> {
+async function getPersistedCache<T>(key: string, essential = false): Promise<CacheEntry<T> | null> {
   const disk = getDiskCache<T>(key);
   if (disk) return disk;
-  const remote = await kvGet<T>(key);
+  // Essential reads (the product a customer is opening) ignore the circuit breaker
+  const remote = await kvGet<T>(key, essential ? { timeoutMs: 2500, bypassBreaker: true } : {});
   if (remote) {
     setDiskCache(key, remote);
     return remote;
@@ -166,7 +167,7 @@ const CATALOG_IDS_TTL_MS = 10 * 60 * 1000;
 async function loadCatalogIds(): Promise<Set<string> | null> {
   const now = Date.now();
   if (catalogIds && now - catalogIds.loadedAt < CATALOG_IDS_TTL_MS) return catalogIds.ids;
-  const remote = await kvGet<string[]>(CATALOG_IDS_KEY);
+  const remote = await kvGet<string[]>(CATALOG_IDS_KEY, { bypassBreaker: true });
   if (remote && Array.isArray(remote.data)) {
     catalogIds = { ids: new Set(remote.data.map(String)), loadedAt: now, syncedAt: remote.timestamp };
     return catalogIds.ids;
@@ -208,7 +209,7 @@ async function loadCatalogSnapshot(): Promise<RolemallProduct[]> {
     catalogSnapshotLoading = (async () => {
       // catalog_all holds every product (several MB): the short storefront timeout is too short for it,
       // and a slow download of this one row must not trip the breaker for all other Supabase reads.
-      const remote = await kvGet<RolemallProduct[]>(CATALOG_KEY, { timeoutMs: 5000, tripBreaker: false });
+      const remote = await kvGet<RolemallProduct[]>(CATALOG_KEY, { timeoutMs: 5000, tripBreaker: false, bypassBreaker: true });
       if (remote && Array.isArray(remote.data)) {
         catalogSnapshot = { products: remote.data, loadedAt: Date.now() };
         return remote.data;
@@ -1022,7 +1023,7 @@ async function getRolemallProductDetails(productId: string | number): Promise<Pr
 
   // Tier 2: Check Persistent Disk Cache (Instant ~1-3ms, survives restarts/cold starts)
   if (!cached) {
-    const diskEntry = await getPersistedCache<RolemallProduct>(`product_${pId}`);
+    const diskEntry = await getPersistedCache<RolemallProduct>(`product_${pId}`, true);
     if (diskEntry) {
       cached = diskEntry;
       memoryCache.productDetails.set(pId, diskEntry);
