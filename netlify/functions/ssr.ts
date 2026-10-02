@@ -90,8 +90,10 @@ export const handler: Handler = async (event) => {
       headers['Netlify-CDN-Cache-Control'] = 'public, max-age=600';
       headers['Netlify-Vary'] = vary;
     } else {
-      // 503 / 500: temporary, never cached
+      // 503 / 500: temporary, never cached. Same Netlify-Vary as every other response for this URL,
+      // otherwise Netlify records "whole query string" for it and ad clicks (?fbclid=) stop sharing the cache.
       headers['Cache-Control'] = 'no-store';
+      headers['Netlify-Vary'] = vary;
     }
 
     return {
@@ -107,6 +109,8 @@ export const handler: Handler = async (event) => {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',
+        // Same rule as every other response (see above)
+        'Netlify-Vary': `query=${MEANINGFUL_QUERY_PARAMS.join('|')}`,
       },
       body: `<!DOCTYPE html>
 <html lang="ar" dir="rtl">
